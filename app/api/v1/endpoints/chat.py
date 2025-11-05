@@ -12,7 +12,6 @@ from app.api.deps import get_rag_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 @router.post(
     "/chat",
     response_model=ChatResponse,
