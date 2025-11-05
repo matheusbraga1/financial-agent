@@ -10,17 +10,21 @@ from app.models.document import DocumentCreate
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-
 class VectorStoreService:
     def __init__(self):
-        """Inicializa conexão com Qdrant."""
         logger.info(f"Conectando ao Qdrant em {settings.qdrant_host}:{settings.qdrant_port}")
-        self.client = QdrantClient(
-            host=settings.qdrant_host,
-            port=settings.qdrant_port
-        )
-        self.collection_name = settings.qdrant_collection
-        self._ensure_collection()
+        try:
+            self.client = QdrantClient(
+                host=settings.qdrant_host,
+                port=settings.qdrant_port,
+                timeout=10
+            )
+            self.collection_name = settings.qdrant_collection
+            self._ensure_collection()
+            logger.info("✓ Qdrant conectado com sucesso")
+        except Exception as e:
+            logger.error(f"✗ Falha ao conectar no Qdrant: {e}")
+            raise ConnectionError(f"Não foi possível conectar ao Qdrant: {e}")
 
     def _ensure_collection(self) -> None:
         collections = self.client.get_collections().collections
