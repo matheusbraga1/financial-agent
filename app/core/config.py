@@ -1,7 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
-
 class Settings(BaseSettings):
     app_name: str = "Chat IA GLPI"
     app_version: str = "1.0.0"
@@ -20,8 +19,8 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimension: int = 384
 
-    top_k_results: int = 3
-    min_similarity_score: float = 0.5
+    top_k_results: int = 10
+    min_similarity_score: float = 0.18
 
     log_level: str = "INFO"
 
@@ -38,7 +37,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
-
 
 @lru_cache()
 def get_settings() -> Settings:

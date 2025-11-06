@@ -6,10 +6,10 @@ import re
 from html import unescape
 
 from app.core.config import get_settings
+from app.utils.retry import retry_database_operation
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
 
 class GLPIService:
     def __init__(self):
@@ -27,6 +27,9 @@ class GLPIService:
 
             self._engine = create_engine(
                 connection_string,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
                 pool_pre_ping=True,
                 pool_recycle=3600,
                 echo=False
@@ -41,6 +44,7 @@ class GLPIService:
             logger.error(f"Erro ao conectar no GLPI: {e}")
             raise
 
+    @retry_database_operation(max_attempts=3)
     def get_all_articles(
             self,
             include_private: bool = False,
@@ -51,23 +55,23 @@ class GLPIService:
         logger.info("Extraindo artigos do GLPI...")
 
         query = f"""
-        SELECT 
-            kb.id,
-            kb.name AS title,
-            kb.answer AS content,
-            kb.date_creation,
-            kb.date_mod,
-            kb.is_faq,
-            kb.view,
-            kbc.completename AS category,
-            kbc.id AS category_id
-        FROM {self.prefix}knowbaseitems AS kb
-        LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
-            ON kb.id = kbrel.knowbaseitems_id
-        LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
-            ON kbrel.knowbaseitemcategories_id = kbc.id
-        WHERE 1=1
-        """
+            SELECT 
+                kb.id,
+                kb.name AS title,
+                kb.answer AS content,
+                kb.date_creation,
+                kb.date_mod,
+                kb.is_faq,
+                kb.view,
+                kbc.completename AS category,
+                kbc.id AS category_id
+            FROM {self.prefix}knowbaseitems AS kb
+            LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
+                ON kb.id = kbrel.knowbaseitems_id
+            LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
+                ON kbrel.knowbaseitemcategories_id = kbc.id
+            WHERE 1=1
+            """
 
         if not include_private:
             query += " AND kb.view > 0"
@@ -210,18 +214,51 @@ class GLPIService:
         if not html_content:
             return ""
 
-        text = unescape(html_content)
+        try:
+            from bs4 import BeautifulSoup
 
-        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'<li>', '\n- ', text, flags=re.IGNORECASE)
+            soup = BeautifulSoup(html_content, 'html.parser')
 
-        text = re.sub(r'<[^>]+>', '', text)
+            for tag in soup(['script', 'style', 'meta', 'link']):
+                tag.decompose()
 
-        text = re.sub(r' +', ' ', text)  # Múltiplos espaços viram um
-        text = re.sub(r'\n\n\n+', '\n\n', text)  # Múltiplas quebras viram duas
+            for ul in soup.find_all(['ul', 'ol']):
+                for li in ul.find_all('li'):
+                    li.insert(0, '• ')
+                    li.append('\n')
 
-        # Remover espaços no início e fim
+            for i in range(1, 7):
+                for h in soup.find_all(f'h{i}'):
+                    h.insert(0, '\n')
+                    h.append(':\n')
+
+            for p in soup.find_all('p'):
+                p.append('\n\n')
+
+            for div in soup.find_all('div'):
+                div.append('\n')
+
+            for br in soup.find_all('br'):
+                br.replace_with('\n')
+
+            for code in soup.find_all(['code', 'pre']):
+                code.insert(0, '`')
+                code.append('`')
+
+            text = soup.get_text()
+
+        except ImportError:
+            logger.debug("BeautifulSoup não disponível, usando limpeza básica")
+            text = unescape(html_content)
+            text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+            text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
+            text = re.sub(r'<li>', '\n• ', text, flags=re.IGNORECASE)
+            text = re.sub(r'<[^>]+>', '', text)
+
+        text = unescape(text)
+        text = re.sub(r' +', ' ', text)
+        text = re.sub(r'\n\n\n+', '\n\n', text)
+        text = re.sub(r'\n ', '\n', text)
         text = text.strip()
 
         return text

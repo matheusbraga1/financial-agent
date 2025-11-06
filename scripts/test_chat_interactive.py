@@ -7,8 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.services.rag_service import rag_service
 
 logging.basicConfig(
-    level=logging.ERROR,
-    format='%(message)s'
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
 def chat_interactive():
@@ -48,7 +48,6 @@ def chat_interactive():
 
         except Exception as e:
             print(f"\n❌ Erro: {e}")
-
 
 if __name__ == "__main__":
     try:
