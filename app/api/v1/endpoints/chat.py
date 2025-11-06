@@ -54,7 +54,6 @@ async def chat(
             f"question_length={len(request.question)}"
         )
 
-        # Validação adicional
         if len(request.question.strip()) < 3:
             logger.warning(f"Pergunta muito curta: '{request.question}'")
             raise HTTPException(
@@ -62,8 +61,7 @@ async def chat(
                 detail="Pergunta muito curta. Digite pelo menos 3 caracteres."
             )
 
-        # Gerar resposta
-        response = rag_service.generate_answer(request.question)
+        response = await rag_service.generate_answer(request.question)
 
         logger.info(
             f"Resposta gerada | "
@@ -89,7 +87,6 @@ async def chat(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao processar sua pergunta. Tente novamente."
         )
-
 
 @router.post(
     "/chat/stream",
@@ -128,7 +125,7 @@ async def chat_stream(
         try:
             logger.info(f"Iniciando streaming | session_id={request.session_id}")
 
-            response = rag_service.generate_answer(request.question)
+            response = await rag_service.generate_answer(request.question)
 
             sources_data = {
                 "type": "sources",
@@ -186,7 +183,6 @@ async def chat_stream(
         }
     )
 
-
 @router.get(
     "/health",
     response_model=Dict[str, str],
@@ -198,7 +194,6 @@ async def health_check() -> Dict[str, str]:
         "status": "healthy",
         "service": "chat"
     }
-
 
 @router.get(
     "/models",
@@ -225,7 +220,6 @@ async def list_models() -> Dict[str, Any]:
             "min_score": settings.min_similarity_score
         }
     }
-
 
 @router.post(
     "/feedback",
