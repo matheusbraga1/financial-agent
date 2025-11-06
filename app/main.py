@@ -33,13 +33,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Exception handlers
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
-# Incluir rotas da API v1
 app.include_router(api_router, prefix="/api/v1")
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -48,11 +45,9 @@ async def startup_event():
     logger.info(f"🤖 Modelo LLM: {settings.ollama_model}")
     logger.info(f"📚 Collection: {settings.qdrant_collection}")
 
-
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Encerrando aplicação...")
-
 
 @app.get("/", tags=["Root"])
 async def root():
@@ -61,7 +56,6 @@ async def root():
         "version": settings.app_version,
         "docs": "/docs"
     }
-
 
 @app.get("/health", tags=["Health"])
 async def health():
