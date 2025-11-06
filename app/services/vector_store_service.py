@@ -189,6 +189,16 @@ class VectorStoreService:
 
         query_normalized = normalize_text(query_text)
         query_words = set(re.findall(r'\w+', query_normalized))
+        # Conteúdo da query sem stopwords comuns, para sobreposições mais
+        # informativas em texto e títulos
+        stopwords_q = {
+            'a','o','as','os','um','uma','uns','umas',
+            'de','do','da','dos','das','e','em','no','na','nos','nas',
+            'para','por','com','sem','ao','aos','à','às','que','como',
+            'ser','estar','ter','fazer','nao','não','duvida','duvidas','pergunta','perguntas'
+        }
+        query_content_words = {w for w in query_words if w not in stopwords_q}
+        q_has_vpn = 'vpn' in query_words
 
         combined_scores = {}
 
@@ -203,14 +213,28 @@ class VectorStoreService:
 
         for point in text_results:
             doc_id = point.id
+            payload = point.payload
+            text_for_overlap = payload.get("search_text") or (
+                (payload.get("title") or "") + " " + (payload.get("content") or "")
+            )
+            text_norm = normalize_text(text_for_overlap)
+            text_words = set(re.findall(r'\w+', text_norm))
+            # Sobreposição usa apenas termos de conteúdo da query
+            overlap_base = query_content_words if query_content_words else query_words
+            overlap_ratio = (len(overlap_base.intersection(text_words)) / len(overlap_base)) if overlap_base else 0.0
+            heuristic_text_score = max(0.0, min(1.0, 0.2 + 0.8 * overlap_ratio))
+            # Penaliza textos que não contêm termos fortes quando a query tem 'vpn'
+            if q_has_vpn and not ({'vpn','virtual','remoto','forticlient','anyconnect'} & text_words):
+                heuristic_text_score *= 0.5
+
             if doc_id in combined_scores:
-                combined_scores[doc_id]["text_score"] = 0.6
+                combined_scores[doc_id]["text_score"] = heuristic_text_score
             else:
                 combined_scores[doc_id] = {
                     "vector_score": 0,
-                    "text_score": 0.6,
+                    "text_score": heuristic_text_score,
                     "title_boost": 0,
-                    "payload": point.payload
+                    "payload": payload
                 }
 
         for doc_id, scores in combined_scores.items():
@@ -218,20 +242,37 @@ class VectorStoreService:
             title_normalized = normalize_text(title)
             title_words = set(re.findall(r'\w+', title_normalized))
 
-            if query_words and title_words:
-                overlap = query_words.intersection(title_words)
-                overlap_ratio = len(overlap) / len(query_words)
+            overlap_base = query_content_words if query_content_words else query_words
+            if overlap_base and title_words:
+                overlap = overlap_base.intersection(title_words)
+                overlap_ratio = len(overlap) / len(overlap_base)
 
                 if overlap_ratio > 0:
                     scores["title_boost"] = overlap_ratio * 0.8
                     logger.debug(f"Título '{title}' tem {overlap_ratio:.1%} overlap → boost={scores['title_boost']:.2f}")
+
+        # Boost genérico por categoria: baseado em sobreposição léxica entre
+        # as palavras da query e o nome da categoria normalizado (stopwords removidas)
+        stopwords = {"e","de","do","da","das","dos","para","em","no","na","nas","nos","por","um","uma","o","a","os","as","internas","internos","geral"}
+        for doc_id, scores in combined_scores.items():
+            category = scores["payload"].get("category", "") or ""
+            category_norm = normalize_text(category)
+            cat_tokens = set(re.findall(r'\w+', category_norm)) - stopwords
+            if not cat_tokens:
+                scores["category_boost"] = 0.0
+                continue
+            overlap = query_content_words.intersection(cat_tokens) if query_content_words else query_words.intersection(cat_tokens)
+            overlap_ratio = len(overlap) / max(1, len(cat_tokens))
+            # Limitamos o boost para evitar dominar o score final
+            scores["category_boost"] = max(0.0, min(1.0, overlap_ratio))
 
         final_results = []
         for doc_id, scores in combined_scores.items():
             final_score = (
                 (scores["vector_score"] * 0.40) +
                 (scores["text_score"] * 0.30) +
-                (scores["title_boost"] * 0.30)
+                (scores["title_boost"] * 0.30) +
+                (scores.get("category_boost", 0.0) * 0.10)
             )
 
             final_score = max(0.0, min(1.0, final_score))
@@ -248,13 +289,93 @@ class VectorStoreService:
 
         final_results.sort(key=lambda x: x["score"], reverse=True)
 
+        # Aplicar MMR simples para diversidade antes do reranking
+        def jaccard(a: set, b: set) -> float:
+            if not a or not b:
+                return 0.0
+            inter = len(a.intersection(b))
+            union = len(a.union(b))
+            return inter / union if union else 0.0
+
+        cand_wordsets = {}
+        for doc in final_results:
+            text = f"{doc.get('title','')} {doc.get('content','')}"
+            norm = normalize_text(text)
+            cand_wordsets[doc['id']] = set(re.findall(r'\w+', norm))
+
+        mmr_lambda = 0.7
+        k = min(initial_limit, len(final_results))
+        selected = []
+        remaining = final_results.copy()
+        while remaining and len(selected) < k:
+            best = None
+            best_score = -1e9
+            for cand in remaining:
+                relevance = cand["score"]
+                if not selected:
+                    diversity_penalty = 0.0
+                else:
+                    max_sim = max(jaccard(cand_wordsets[cand['id']], cand_wordsets[s['id']]) for s in selected)
+                    diversity_penalty = max_sim
+                mmr_score = mmr_lambda * relevance - (1 - mmr_lambda) * diversity_penalty
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best = cand
+            selected.append(best)
+            remaining.remove(best)
+
+        final_results = selected
+
         logger.debug(f"Busca híbrida: {len(final_results)} documentos antes do reranking")
 
         if self._reranking_enabled and len(final_results) > 1:
             final_results = self._rerank_results(query_text, final_results[:initial_limit])
             logger.debug(f"Reranking aplicado com CrossEncoder")
 
-        return final_results[:limit]
+        # Gating por termos-âncora da query: se houver ao menos um candidato
+        # que contenha algum termo de conteúdo da query, prioriza resultados
+        # com esses termos para reduzir ruído (ex.: 'rede' genérica vs 'vpn').
+        try:
+            anchor_stop = {"rede","conectar","conexao","conexão","acessar","acesso","gerenciador","aplicativo","dispositivo","empresa","corporativa","sistema","plataforma"}
+            anchors = {w for w in query_words if w not in anchor_stop}
+            # Usa apenas âncoras de conteúdo se disponíveis
+            if 'query_content_words' in locals() and query_content_words:
+                anchors = {w for w in query_content_words if w not in anchor_stop}
+
+            def doc_has_anchor(doc):
+                text = f"{doc.get('title','')} {doc.get('content','')}"
+                norm = normalize_text(text)
+                tokens = set(re.findall(r'\w+', norm))
+                return bool(anchors & tokens)
+
+            if anchors:
+                any_with_anchor = any(doc_has_anchor(d) for d in final_results)
+                if any_with_anchor:
+                    filtered = [d for d in final_results if doc_has_anchor(d)]
+                    if filtered:
+                        logger.debug(f"Anchor gating aplicado - mantidos {len(filtered)}/{len(final_results)}")
+                        final_results = filtered
+        except Exception as _e:
+            logger.debug(f"Anchor gating falhou: {_e}")
+
+        # Enforce final score threshold after reranking (avoid baixos scores escaparem)
+        final_min = score_threshold if score_threshold is not None else 0.0
+        final_results = [d for d in final_results if d.get("score", 0.0) >= final_min]
+
+        # Deduplicate by normalized (title, category)
+        seen_keys = set()
+        deduped = []
+        for doc in final_results:
+            title_norm = (doc.get("title") or "").strip().lower()
+            category_norm = (doc.get("category") or "").strip().lower()
+            key = (title_norm, category_norm)
+            if title_norm and key in seen_keys:
+                continue
+            if title_norm:
+                seen_keys.add(key)
+            deduped.append(doc)
+
+        return deduped[:limit]
 
     def _rerank_results(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
