@@ -10,7 +10,6 @@ from app.api.deps import get_vector_store, get_embedding_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 @router.post(
     "/documents",
     response_model=DocumentResponse,
@@ -26,13 +25,11 @@ async def create_document(
     try:
         logger.info(f"Criando documento: {document.title}")
 
-        # Gerar embedding do conteúdo
         vector = embedding_service.encode_document(
             title=document.title,
             content=document.content
         )
 
-        # Adicionar ao vector store
         doc_id = vector_store.add_document(
             document=document,
             vector=vector
@@ -52,7 +49,6 @@ async def create_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao criar documento"
         )
-
 
 @router.get(
     "/documents/info",

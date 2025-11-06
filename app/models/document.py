@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
-
 class DocumentCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     category: str = Field(..., min_length=1, max_length=100)
@@ -19,14 +18,12 @@ class DocumentCreate(BaseModel):
             }
         }
 
-
 class DocumentResponse(BaseModel):
     id: str
     title: str
     category: str
     created_at: datetime
     indexed: bool = True
-
 
 class DocumentList(BaseModel):
     total: int

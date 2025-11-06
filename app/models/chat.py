@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
-
 class ChatRequest(BaseModel):
     question: str = Field(
         ...,
@@ -17,13 +16,11 @@ class ChatRequest(BaseModel):
         example="550e8400-e29b-41d4-a716-446655440000"
     )
 
-
 class SourceDocument(BaseModel):
     id: str
     title: str
     category: str
     score: float = Field(..., ge=0, le=1)
-
 
 class ChatResponse(BaseModel):
     answer: str = Field(..., description="Resposta da IA")

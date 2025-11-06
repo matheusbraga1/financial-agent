@@ -6,7 +6,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.services.vector_store_service import vector_store_service
 from app.services.embedding_service import embedding_service
 
-
 def search_and_inspect(query: str):
     """Busca e mostra conteúdo completo."""
 
@@ -14,10 +13,8 @@ def search_and_inspect(query: str):
     print(f"🔍 BUSCANDO: {query}")
     print("=" * 70)
 
-    # Gerar embedding da busca
     vector = embedding_service.encode_text(query)
 
-    # Buscar
     results = vector_store_service.search_similar(
         query_vector=vector,
         limit=3
@@ -27,7 +24,6 @@ def search_and_inspect(query: str):
         print("\n❌ Nenhum resultado encontrado")
         return
 
-    # Mostrar cada resultado
     for i, doc in enumerate(results, 1):
         print(f"\n{'=' * 70}")
         print(f"RESULTADO {i}")
@@ -39,7 +35,6 @@ def search_and_inspect(query: str):
         print(f"\n--- CONTEÚDO COMPLETO ---")
         print(doc['content'])
         print(f"--- FIM DO CONTEÚDO ---\n")
-
 
 if __name__ == "__main__":
     query = "como faço para resolver o erro de execução da financial sistemas"

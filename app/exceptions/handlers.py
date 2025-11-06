@@ -5,18 +5,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class DocumentNotFoundException(Exception):
     pass
-
 
 class EmbeddingException(Exception):
     pass
 
-
 class LLMException(Exception):
     pass
-
 
 async def validation_exception_handler(
     request: Request,
@@ -30,7 +26,6 @@ async def validation_exception_handler(
             "errors": exc.errors()
         }
     )
-
 
 async def general_exception_handler(
     request: Request,
