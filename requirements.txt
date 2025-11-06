@@ -13,7 +13,7 @@ qdrant-client==1.7.3
 python-dotenv==1.0.0
 python-multipart==0.0.6
 
-numpy==1.26.3
+numpy>=1.26.0,<2.0
 scikit-learn==1.4.0
 
 pymysql==1.1.1
@@ -22,4 +22,6 @@ sqlalchemy==2.0.23
 beautifulsoup4==4.12.3
 
 tenacity==8.2.3
-httpx==0.26.0
+httpx<0.26.0,>=0.25.2
+markdown==3.5.2
+PyJWT==2.8.0

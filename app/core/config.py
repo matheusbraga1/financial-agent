@@ -24,6 +24,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Auth/JWT
+    jwt_secret: str = "change-me-in-.env"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60
+
     glpi_db_host: str = "localhost"
     glpi_db_port: int = 3306
     glpi_db_name: str = "glpi"
