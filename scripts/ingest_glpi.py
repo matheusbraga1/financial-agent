@@ -346,7 +346,11 @@ class GLPIIngestion:
                 content=article['content']
             )
 
-            vector = self.embedding.encode_text(document.content)
+            vector = self.embedding.encode_document(
+                title=document.title,
+                content=document.content,
+                title_weight=3
+            )
             doc_id = self.vector_store.add_document(
                 document=document,
                 vector=vector,

@@ -217,7 +217,9 @@ class GLPIService:
         try:
             from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(html_content, 'html.parser')
+            # Primeiro, decodifica entidades HTML (ex.: &lt;strong&gt;) para que o parser
+            # trate como tags reais e possamos removê-las corretamente.
+            soup = BeautifulSoup(unescape(html_content), 'html.parser')
 
             for tag in soup(['script', 'style', 'meta', 'link']):
                 tag.decompose()
@@ -259,6 +261,12 @@ class GLPIService:
         text = re.sub(r' +', ' ', text)
         text = re.sub(r'\n\n\n+', '\n\n', text)
         text = re.sub(r'\n ', '\n', text)
+        # Normalize bullets at line starts to ASCII hyphen, avoiding mojibake
+        try:
+            text = re.sub(r'(?m)^\s*[\u2022\u00B7\u2219\u25CF\u25E6]+\s+', '- ', text)
+            text = re.sub(r'(?m)^\s*\uFFFD\?\uFFFD\s+', '- ', text)
+        except Exception:
+            pass
         text = text.strip()
 
         return text
