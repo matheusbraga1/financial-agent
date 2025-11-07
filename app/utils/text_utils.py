@@ -131,3 +131,4 @@ def process_answer_formats(markdown_answer: str) -> Tuple[str, str, str]:
     plain = markdown_to_plain_text(cleaned_md)
 
     return cleaned_md, html, plain
+

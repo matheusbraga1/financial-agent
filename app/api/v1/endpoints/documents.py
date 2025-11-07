@@ -10,6 +10,7 @@ from app.services.embedding_service import EmbeddingService
 from app.api.deps import get_vector_store, get_embedding_service
 from app.api.security import get_current_user
 
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -25,29 +26,35 @@ logger = logging.getLogger(__name__)
         400: {"description": "Dados inválidos", "model": ErrorResponse},
         401: {"description": "Não autorizado", "model": ErrorResponse},
         403: {"description": "Proibido", "model": ErrorResponse},
-        500: {"description": "Erro interno do servidor", "model": ErrorResponse}
-    }
+        500: {"description": "Erro interno do servidor", "model": ErrorResponse},
+    },
 )
 async def create_document(
-        document: DocumentCreate,
-        vector_store: VectorStoreService = Depends(get_vector_store),
-        embedding_service: EmbeddingService = Depends(get_embedding_service),
-        current_user = Depends(get_current_user)
+    document: DocumentCreate,
+    vector_store: VectorStoreService = Depends(get_vector_store),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    current_user = Depends(get_current_user),
 ) -> DocumentResponse:
+    import asyncio
+
     try:
-        if not bool(current_user.get('is_admin')):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Apenas administradores podem criar documentos")
+        if not bool(current_user.get("is_admin")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas administradores podem criar documentos",
+            )
 
         logger.info(f"Criando documento: {document.title}")
+        loop = asyncio.get_running_loop()
 
-        vector = embedding_service.encode_document(
-            title=document.title,
-            content=document.content
+        # Gerar embedding em thread pool (CPU-bound)
+        vector = await loop.run_in_executor(
+            None, embedding_service.encode_document, document.title, document.content
         )
 
-        doc_id = vector_store.add_document(
-            document=document,
-            vector=vector
+        # Adicionar documento ao Qdrant em thread pool
+        doc_id = await loop.run_in_executor(
+            None, vector_store.add_document, document, vector
         )
 
         return DocumentResponse(
@@ -55,14 +62,16 @@ async def create_document(
             title=document.title,
             category=document.category,
             created_at=datetime.now(),
-            indexed=True
+            indexed=True,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Erro ao criar documento: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Erro ao criar documento"
+            detail="Erro ao criar documento",
         )
 
 
@@ -70,24 +79,28 @@ async def create_document(
     "/info",
     response_model=Dict[str, Any],
     summary="Informações da base de conhecimento",
-    description="Retorna estatísticas sobre os documentos indexados (requer login)",
+    description="Retorna estatísticas públicas sobre os documentos indexados (total, categorias, etc.)",
     responses={
-        200: {"description": "Estatísticas"},
-        401: {"description": "Não autorizado", "model": ErrorResponse},
-        500: {"description": "Erro interno do servidor", "model": ErrorResponse}
-    }
+        200: {"description": "Estatísticas da base de conhecimento"},
+        500: {"description": "Erro interno do servidor", "model": ErrorResponse},
+    },
 )
 async def get_documents_info(
-        vector_store: VectorStoreService = Depends(get_vector_store),
-        current_user = Depends(get_current_user)
+    vector_store: VectorStoreService = Depends(get_vector_store),
 ) -> Dict[str, Any]:
+    import asyncio
+
     try:
-        info = vector_store.get_collection_info()
+        loop = asyncio.get_running_loop()
+        # Buscar info em thread pool (I/O bound - Qdrant)
+        info = await loop.run_in_executor(
+            None, vector_store.get_collection_info
+        )
         return info
     except Exception as e:
         logger.error(f"Erro ao buscar info: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Erro ao buscar informações"
+            detail="Erro ao buscar informações",
         )
 

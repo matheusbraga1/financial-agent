@@ -2,12 +2,13 @@ from sentence_transformers import SentenceTransformer
 from typing import List
 import logging
 from functools import lru_cache
-import hashlib
 
 from app.core.config import get_settings
 
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
 
 class EmbeddingService:
     _instance = None
@@ -56,7 +57,9 @@ class EmbeddingService:
         Retorna tuple para ser hashable pelo lru_cache.
         """
         self._cache_misses += 1
-        logger.debug(f"Cache miss - Gerando embedding para texto de {len(normalized_text)} caracteres")
+        logger.debug(
+            f"Cache miss - Gerando embedding para texto de {len(normalized_text)} caracteres"
+        )
         vector = self._model.encode(normalized_text).tolist()
         return tuple(vector)
 
@@ -68,7 +71,10 @@ class EmbeddingService:
             "misses": cache_info.misses,
             "size": cache_info.currsize,
             "maxsize": cache_info.maxsize,
-            "hit_rate": cache_info.hits / (cache_info.hits + cache_info.misses) if (cache_info.hits + cache_info.misses) > 0 else 0
+            "hit_rate": cache_info.hits
+            / (cache_info.hits + cache_info.misses)
+            if (cache_info.hits + cache_info.misses) > 0
+            else 0,
         }
 
     def clear_cache(self):
@@ -93,4 +99,6 @@ class EmbeddingService:
         logger.debug(f"Gerando embedding para documento: {title[:50]}...")
         return self.encode_text(combined_text)
 
+
 embedding_service = EmbeddingService()
+

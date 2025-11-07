@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
 
@@ -8,15 +8,14 @@ class DocumentCreate(BaseModel):
     content: str = Field(..., min_length=10, max_length=10000)
     metadata: Optional[dict] = Field(default=None)
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "title": "Como resetar senha",
-                "category": "Email",
-                "content": "Para resetar sua senha...",
-                "metadata": {"author": "TI", "version": "1.0"}
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "title": "Como resetar senha",
+            "category": "Email",
+            "content": "Para resetar sua senha...",
+            "metadata": {"author": "TI", "version": "1.0"},
         }
+    })
 
 class DocumentResponse(BaseModel):
     id: str

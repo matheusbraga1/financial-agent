@@ -8,8 +8,10 @@ from html import unescape
 from app.core.config import get_settings
 from app.utils.retry import retry_database_operation
 
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
 
 class GLPIService:
     def __init__(self):
@@ -32,13 +34,13 @@ class GLPIService:
                 pool_timeout=30,
                 pool_pre_ping=True,
                 pool_recycle=3600,
-                echo=False
+                echo=False,
             )
 
             with self._engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
 
-            logger.info(f"✓ Conectado ao GLPI em {settings.glpi_db_host}")
+            logger.info(f"Conectado ao GLPI em {settings.glpi_db_host}")
 
         except Exception as e:
             logger.error(f"Erro ao conectar no GLPI: {e}")
@@ -46,9 +48,9 @@ class GLPIService:
 
     @retry_database_operation(max_attempts=3)
     def get_all_articles(
-            self,
-            include_private: bool = False,
-            min_content_length: int = None
+        self,
+        include_private: bool = False,
+        min_content_length: int | None = None,
     ) -> List[Dict[str, Any]]:
         min_length = min_content_length or settings.glpi_min_content_length
 
@@ -71,7 +73,7 @@ class GLPIService:
             LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
                 ON kbrel.knowbaseitemcategories_id = kbc.id
             WHERE 1=1
-            """
+        """
 
         if not include_private:
             query += " AND kb.view > 0"
@@ -85,40 +87,39 @@ class GLPIService:
 
             logger.info(f"Encontrados {len(rows)} artigos no GLPI")
 
-            articles = []
+            articles: List[Dict[str, Any]] = []
             skipped = 0
 
             for row in rows:
                 article_dict = dict(row._mapping)
-
-                clean_content = self._clean_html(article_dict['content'])
+                clean_content = self._clean_html(article_dict.get("content") or "")
 
                 if len(clean_content) < min_length:
                     logger.debug(
-                        f"Artigo '{article_dict['title']}' muito curto ({len(clean_content)} chars), ignorando"
+                        f"Artigo '{article_dict.get('title')}' muito curto ({len(clean_content)} chars), ignorando"
                     )
                     skipped += 1
                     continue
 
-                article = {
-                    'id': str(article_dict['id']),
-                    'title': article_dict['title'] or 'Sem título',
-                    'content': clean_content,
-                    'category': article_dict['category'] or 'Geral',
-                    'metadata': {
-                        'glpi_id': article_dict['id'],
-                        'category_id': article_dict['category_id'],
-                        'is_faq': bool(article_dict['is_faq']),
-                        'date_creation': str(article_dict['date_creation']),
-                        'date_mod': str(article_dict['date_mod']),
-                        'source': 'GLPI',
-                        'visibility': 'public' if article_dict['view'] > 0 else 'private'
+                articles.append(
+                    {
+                        "id": str(article_dict["id"]),
+                        "title": article_dict.get("title") or "Sem título",
+                        "content": clean_content,
+                        "category": article_dict.get("category") or "Geral",
+                        "metadata": {
+                            "glpi_id": article_dict["id"],
+                            "category_id": article_dict.get("category_id"),
+                            "is_faq": bool(article_dict.get("is_faq")),
+                            "date_creation": str(article_dict.get("date_creation")),
+                            "date_mod": str(article_dict.get("date_mod")),
+                            "source": "GLPI",
+                            "visibility": "public" if article_dict.get("view", 0) > 0 else "private",
+                        },
                     }
-                }
+                )
 
-                articles.append(article)
-
-            logger.info(f"✓ {len(articles)} artigos válidos extraídos ({skipped} ignorados)")
+            logger.info(f"{len(articles)} artigos válidos extraídos ({skipped} ignorados)")
             return articles
 
         except Exception as e:
@@ -127,36 +128,31 @@ class GLPIService:
 
     def get_article_by_id(self, article_id: int) -> Optional[Dict[str, Any]]:
         query = f"""
-        SELECT 
-            kb.id,
-            kb.name AS title,
-            kb.answer AS content,
-            kbc.completename AS category
-        FROM {self.prefix}knowbaseitems AS kb
-        LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
-            ON kb.id = kbrel.knowbaseitems_id
-        LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
-            ON kbrel.knowbaseitemcategories_id = kbc.id
-        WHERE kb.id = :article_id
+            SELECT 
+                kb.id,
+                kb.name AS title,
+                kb.answer AS content,
+                kbc.completename AS category
+            FROM {self.prefix}knowbaseitems AS kb
+            LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
+                ON kb.id = kbrel.knowbaseitems_id
+            LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
+                ON kbrel.knowbaseitemcategories_id = kbc.id
+            WHERE kb.id = :article_id
         """
-
         try:
             with self._engine.connect() as conn:
                 result = conn.execute(text(query), {"article_id": article_id})
                 row = result.fetchone()
-
-            if not row:
-                return None
-
-            article_dict = dict(row._mapping)
-
-            return {
-                'id': str(article_dict['id']),
-                'title': article_dict['title'],
-                'content': self._clean_html(article_dict['content']),
-                'category': article_dict['category'] or 'Geral'
-            }
-
+                if not row:
+                    return None
+                data = dict(row._mapping)
+                return {
+                    "id": str(data["id"]),
+                    "title": data.get("title") or "Sem título",
+                    "content": self._clean_html(data.get("content") or ""),
+                    "category": data.get("category") or "Geral",
+                }
         except Exception as e:
             logger.error(f"Erro ao buscar artigo {article_id}: {e}")
             return None
@@ -180,7 +176,6 @@ class GLPIService:
 
             categories = [dict(row._mapping) for row in rows]
             logger.info(f"Encontradas {len(categories)} categorias")
-
             return categories
 
         except Exception as e:
@@ -189,22 +184,19 @@ class GLPIService:
 
     def get_stats(self) -> Dict[str, Any]:
         queries = {
-            'total_articles': f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems",
-            'public_articles': f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE view > 0",
-            'faq_articles': f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE is_faq = 1",
-            'total_categories': f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitemcategories"
+            "total_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems",
+            "public_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE view > 0",
+            "faq_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE is_faq = 1",
+            "total_categories": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitemcategories",
         }
 
-        stats = {}
-
+        stats: Dict[str, Any] = {}
         try:
             with self._engine.connect() as conn:
-                for key, query in queries.items():
-                    result = conn.execute(text(query))
+                for key, q in queries.items():
+                    result = conn.execute(text(q))
                     stats[key] = result.fetchone()[0]
-
             return stats
-
         except Exception as e:
             logger.error(f"Erro ao buscar estatísticas: {e}")
             return {}
@@ -217,69 +209,57 @@ class GLPIService:
         try:
             from bs4 import BeautifulSoup
 
-            # Primeiro, decodifica entidades HTML (ex.: &lt;strong&gt;) para que o parser
-            # trate como tags reais e possamos removê-las corretamente.
-            soup = BeautifulSoup(unescape(html_content), 'html.parser')
+            soup = BeautifulSoup(unescape(html_content), "html.parser")
 
-            for tag in soup(['script', 'style', 'meta', 'link']):
+            for tag in soup(["script", "style", "meta", "link"]):
                 tag.decompose()
 
-            for ul in soup.find_all(['ul', 'ol']):
-                for li in ul.find_all('li'):
-                    li.insert(0, '• ')
-                    li.append('\n')
+            # Listas -> uma linha por item com "- "
+            for ul in soup.find_all(["ul", "ol"]):
+                for li in ul.find_all("li"):
+                    li.insert(0, "- ")
+                    li.append("\n")
 
+            # Cabeçalhos: quebra de linha e dois pontos
             for i in range(1, 7):
-                for h in soup.find_all(f'h{i}'):
-                    h.insert(0, '\n')
-                    h.append(':\n')
+                for h in soup.find_all(f"h{i}"):
+                    h.insert(0, "\n")
+                    h.append(":\n")
 
-            for p in soup.find_all('p'):
-                p.append('\n\n')
+            for p in soup.find_all("p"):
+                p.append("\n\n")
 
-            for div in soup.find_all('div'):
-                div.append('\n')
+            for div in soup.find_all("div"):
+                div.append("\n")
 
-            for br in soup.find_all('br'):
-                br.replace_with('\n')
-
-            for code in soup.find_all(['code', 'pre']):
-                code.insert(0, '`')
-                code.append('`')
+            for br in soup.find_all("br"):
+                br.replace_with("\n")
 
             text = soup.get_text()
 
-        except ImportError:
+        except Exception:
             logger.debug("BeautifulSoup não disponível, usando limpeza básica")
             text = unescape(html_content)
-            text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-            text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
-            text = re.sub(r'<li>', '\n• ', text, flags=re.IGNORECASE)
-            text = re.sub(r'<[^>]+>', '', text)
+            text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+            text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+            text = re.sub(r"<li>", "\n- ", text, flags=re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", "", text)
 
         text = unescape(text)
-        text = re.sub(r' +', ' ', text)
-        text = re.sub(r'\n\n\n+', '\n\n', text)
-        text = re.sub(r'\n ', '\n', text)
-        # Normalize bullets at line starts to ASCII hyphen, avoiding mojibake
-        try:
-            text = re.sub(r'(?m)^\s*[\u2022\u00B7\u2219\u25CF\u25E6]+\s+', '- ', text)
-            text = re.sub(r'(?m)^\s*\uFFFD\?\uFFFD\s+', '- ', text)
-        except Exception:
-            pass
-        text = text.strip()
-
-        return text
+        text = re.sub(r" +", " ", text)
+        text = re.sub(r"\n\n\n+", "\n\n", text)
+        text = re.sub(r"\n ", "\n", text)
+        return text.strip()
 
     def test_connection(self) -> bool:
         try:
             with self._engine.connect() as conn:
                 result = conn.execute(text("SELECT VERSION()"))
                 version = result.fetchone()[0]
-                logger.info(f"✓ Conexão OK - MySQL/MariaDB versão: {version}")
+                logger.info(f"Conexão OK - MySQL/MariaDB versão: {version}")
                 return True
         except Exception as e:
-            logger.error(f"✗ Falha na conexão: {e}")
+            logger.error(f"Falha na conexão: {e}")
             return False
 
     def close(self):
@@ -287,4 +267,6 @@ class GLPIService:
             self._engine.dispose()
             logger.info("Conexão com GLPI fechada")
 
+
 glpi_service = GLPIService()
+

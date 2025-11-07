@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(pip install:*)",
+      "Bash(python -c:*)",
+      "Bash(curl:*)",
+      "Bash(timeout 3 bash:*)",
+      "Bash(timeout 5 bash:*)",
+      "Bash(python test_login.py:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python test_chat_complete.py:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

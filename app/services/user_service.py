@@ -11,7 +11,7 @@ class UserService:
         data_dir = os.path.join(base_dir, "app_data")
         os.makedirs(data_dir, exist_ok=True)
         self.db_path = db_path or os.path.join(data_dir, "auth.db")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # RLock permite reentrância (mesmo thread pode adquirir múltiplas vezes)
         self._init_db()
 
     def _connect(self):
