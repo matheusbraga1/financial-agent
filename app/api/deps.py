@@ -92,6 +92,7 @@ def get_rag_service(
     llm: LLMPort = Depends(get_llm),
 ) -> RAGPort:
     # Import lazy para evitar custo em endpoints que não usam RAG
+    # RAG Service com melhorias multi-domínio de precisão integradas
     from app.services.rag_service import RAGService
     yield RAGService(embedding_service=emb, vector_store=vs, llm=llm)
 

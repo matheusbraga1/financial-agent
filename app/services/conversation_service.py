@@ -13,17 +13,14 @@ class ConversationService:
         os.makedirs(data_dir, exist_ok=True)
         self.db_path = db_path or os.path.join(data_dir, "chat_history.db")
         self._lock = threading.Lock()
-        # RetenÃ§Ã£o configurÃ¡vel (padrÃ£o: 90 dias) e janela mÃ­nima entre purgas
         self.retention_days = int(os.getenv("CHAT_HISTORY_RETENTION_DAYS", "90"))
         self._purge_interval_sec = int(os.getenv("CHAT_HISTORY_PURGE_INTERVAL_SEC", "3600"))
         self._last_purge = 0.0
         self._init_db()
 
     def _connect(self):
-        # Timeout ajuda a evitar "database is locked" sob contenÃ§Ã£o leve
         conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=5.0)
         conn.row_factory = sqlite3.Row
-        # PRAGMAs de robustez/desempenho para workload de gravaÃ§Ã£o leve
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
@@ -60,7 +57,6 @@ class ConversationService:
                 )
                 """
             )
-            # Ãndices para acelerar histÃ³rico por sessÃ£o e ordenaÃ§Ã£o temporal
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, timestamp);")
             conn.commit()
@@ -77,7 +73,6 @@ class ConversationService:
             cur.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff,))
             conn.commit()
         except Exception:
-            # NÃ£o interrompe o fluxo caso limpeza falhe
             pass
         finally:
             self._last_purge = now
