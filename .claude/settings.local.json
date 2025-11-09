@@ -11,7 +11,20 @@
       "Bash(python -m py_compile:*)",
       "Bash(python test_chat_complete.py:*)",
       "Bash(taskkill:*)",
-      "Bash(powershell -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2\")"
+      "Bash(powershell -Command \"Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2\")",
+      "Bash(docker-compose up:*)",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(docker exec:*)",
+      "Bash(mkdir:*)",
+      "Bash(python scripts/test_improvements.py:*)",
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell -Command \"Get-Process -Id 10656 | Select-Object ProcessName, Id\")"
     ],
     "deny": [],
     "ask": []

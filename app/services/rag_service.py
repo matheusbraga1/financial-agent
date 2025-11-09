@@ -69,7 +69,7 @@ class RetrieverMultidomain:
             Lista de documentos relevantes
         """
         try:
-            query_vector = self.embedding_service.embed_query(query)
+            query_vector = self.embedding_service.encode_text(query)
 
             # Se o vector_store suporta filtros de domínio, use-os
             if hasattr(self.vector_store, 'search_hybrid_filtered'):
@@ -142,7 +142,8 @@ class RAGService:
         )
         self._fmt: AnswerFormatterPort = formatter or AnswerFormatterWithExamples()
         self._llm: LLMPort = llm or OllamaLLM(self.model)
-        self._clarifier: ClarifierPort = clarifier or Clarifier()
+        # Passa o LLM para o Clarifier para gerar perguntas inteligentes
+        self._clarifier: ClarifierPort = clarifier or Clarifier(llm_service=self._llm)
 
         # Componentes específicos de multi-domain
         self._domain_classifier = DomainClassifier()
@@ -304,9 +305,15 @@ class RAGService:
         else:
             documents = self._retriever.retrieve(expanded_question, top_k, min_score)
 
+        logger.info(f"📚 Documentos recuperados: {len(documents)}")
+        if documents:
+            for i, doc in enumerate(documents[:3]):
+                logger.info(f"  Doc {i+1}: '{doc.get('title')}' (score: {doc.get('score', 0):.4f})")
+
         # 5. Clarificação proativa se necessário
         clar_text = self._clarifier.maybe_clarify(question, documents)
         if clar_text:
+            logger.info("💬 Retornando clarificação ao invés de resposta")
             cleaned_markdown, html_answer, plain_answer = process_answer_formats(clar_text)
             return ChatResponse(
                 answer=cleaned_markdown,
@@ -319,6 +326,7 @@ class RAGService:
 
         # 6. Se não há documentos, retorna resposta padrão
         if not documents:
+            logger.warning("⚠️  Nenhum documento encontrado - retornando resposta padrão")
             return self._generate_no_context_response(question)
 
         # 7. Calcula confiança multi-fatorial

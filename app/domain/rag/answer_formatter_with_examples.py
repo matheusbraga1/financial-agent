@@ -20,29 +20,7 @@ class AnswerFormatterWithExamples(AnswerFormatter):
     FEW_SHOT_EXAMPLES = """
 EXEMPLOS DE RESPOSTAS DE ALTA QUALIDADE:
 
-Exemplo 1 - Procedimento de TI:
-Pergunta: "Como resetar minha senha do Windows?"
-Resposta:
-## Como Resetar a Senha do Windows
-
-Para resetar sua senha corporativa, siga estes passos:
-
-1. Acesse o portal de autoatendimento: `https://senha.empresa.com`
-2. Clique em **"Esqueci minha senha"**
-3. Digite seu **e-mail corporativo**
-4. Siga as instruções enviadas por e-mail para criar uma nova senha
-
-**Requisitos da nova senha:**
-- Mínimo de 8 caracteres
-- Letras maiúsculas e minúsculas
-- Pelo menos 1 número
-- Pelo menos 1 caractere especial (@, #, !, etc.)
-
-> **Importante:** Se não receber o e-mail em 5 minutos, verifique a caixa de spam ou abra um chamado.
-
----
-
-Exemplo 2 - RH:
+Exemplo 1 - RH:
 Pergunta: "Como solicitar férias?"
 Resposta:
 ## Como Solicitar Férias
@@ -64,7 +42,7 @@ Resposta:
 
 ---
 
-Exemplo 3 - Financeiro:
+Exemplo 2 - Financeiro:
 Pergunta: "Como solicitar reembolso de despesas?"
 Resposta:
 ## Como Solicitar Reembolso
@@ -95,7 +73,7 @@ Formatos aceitos: **PDF, JPG, PNG** (máx. 5MB cada)
 
 ---
 
-Exemplo 4 - Troubleshooting:
+Exemplo 3 - Troubleshooting:
 Pergunta: "Impressora está offline"
 Resposta:
 ## Resolver Impressora Offline
