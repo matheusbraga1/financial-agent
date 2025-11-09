@@ -30,3 +30,9 @@ markdown==3.5.2
 PyJWT==2.8.0
 pytest>=7.4
 pytest-asyncio>=0.21
+
+# Processamento de documentos multi-formato
+PyMuPDF==1.23.8  # PDFs
+python-docx==1.1.0  # Word Documents
+openpyxl==3.1.2  # Excel (opcional)
+langchain-text-splitters==0.3.0  # Chunking avançado
