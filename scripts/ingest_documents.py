@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 import logging
+import uuid
 
 # Adicionar diretório raiz ao path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.domain.documents.metadata_schema import DocumentMetadata, Department, DocType
 from app.domain.documents.document_processor import DocumentProcessor
 from app.services.embedding_service import embedding_service
-from app.services.vector_store_service_extended import vector_store_service_extended
+from app.services.vector_store_multidomain import vector_store_multidomain as vector_store_service_extended
 from app.core.config import get_settings
 
 # Setup logging
@@ -132,7 +133,7 @@ class DocumentIngester:
 
         logger.debug(
             f"Metadados detectados: {file_path.name} → "
-            f"{metadata.department.value}/{metadata.doc_type.value}"
+            f"{metadata.department}/{metadata.doc_type}"
         )
 
         return metadata
@@ -164,7 +165,7 @@ class DocumentIngester:
             if dry_run:
                 logger.info(
                     f"[DRY-RUN] {file_path.name}: "
-                    f"{len(chunks)} chunks ({metadata.department.value})"
+                    f"{len(chunks)} chunks ({metadata.department})"
                 )
                 return len(chunks)
 
@@ -173,8 +174,12 @@ class DocumentIngester:
                 # Gerar embedding
                 embedding = self.embedding_service.encode_text(chunk_meta.text)
 
-                # Criar ID único para o chunk
-                chunk_id = f"{chunk_meta.source_id}_chunk_{chunk_meta.chunk_index}"
+                # Criar ID único para o chunk (string para referência)
+                chunk_id_str = f"{chunk_meta.source_id}_chunk_{chunk_meta.chunk_index}"
+
+                # Gerar UUID determinístico a partir do string ID
+                # Usar namespace UUID5 para garantir mesmos IDs em re-ingestões
+                chunk_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id_str))
 
                 # Preparar payload para Qdrant
                 payload = {
@@ -189,6 +194,7 @@ class DocumentIngester:
                     "chunk_index": chunk_meta.chunk_index,
                     "total_chunks": chunk_meta.total_chunks,
                     "file_format": chunk_meta.file_format,
+                    "source_id": chunk_meta.source_id,  # Manter ID original para referência
                 }
 
                 # Inserir no Qdrant
@@ -206,7 +212,7 @@ class DocumentIngester:
 
             logger.info(
                 f"✓ {file_path.name}: {len(chunks)} chunks indexados "
-                f"({metadata.department.value}/{metadata.doc_type.value})"
+                f"({metadata.department}/{metadata.doc_type})"
             )
 
             return len(chunks)
