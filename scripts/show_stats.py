@@ -2,8 +2,11 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.vector_store_service import vector_store_service
+from app.services.vector_store_service import get_vector_store_instance
 from app.services.glpi_service import GLPIService
+
+# Get service instances
+vector_store_service = get_vector_store_instance()
 
 print("\n" + "=" * 70)
 print("ESTATÍSTICAS DO SISTEMA")

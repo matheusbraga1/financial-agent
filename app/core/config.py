@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     fallback_min_score: float = 0.05  # Threshold para busca fallback
     enable_query_expansion: bool = True  # Expandir queries com sinônimos
 
+    # RAG Features
+    enable_clarification: bool = True  # Ask follow-up questions for generic queries
+    enable_reranking: bool = True  # CrossEncoder reranking for better precision
+
     log_level: str = "INFO"
 
     # Auth/JWT

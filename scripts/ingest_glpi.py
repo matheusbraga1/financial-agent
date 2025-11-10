@@ -9,10 +9,14 @@ import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.glpi_service import GLPIService
-from app.services.vector_store_service import vector_store_service
-from app.services.embedding_service import embedding_service
+from app.services.vector_store_service import get_vector_store_instance
+from app.services.embedding_service import get_embedding_service_instance
 from app.models.document import DocumentCreate
 from app.core.config import get_settings
+
+# Get service instances
+vector_store_service = get_vector_store_instance()
+embedding_service = get_embedding_service_instance()
 
 
 logging.basicConfig(
@@ -303,7 +307,22 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Importar artigos do GLPI para o Qdrant"
+        description="Importar artigos do GLPI para o Qdrant",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos de uso:
+  # Sincronização completa (padrão)
+  python scripts/ingest_glpi.py
+
+  # Limpar dados existentes e reimportar tudo
+  python scripts/ingest_glpi.py --clear
+
+  # Incluir artigos privados
+  python scripts/ingest_glpi.py --include-private
+
+  # Sincronizar apenas um artigo específico
+  python scripts/ingest_glpi.py --article-id 123
+        """
     )
     parser.add_argument(
         "--include-private", action="store_true", help="Incluir artigos privados"

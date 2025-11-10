@@ -98,5 +98,19 @@ class UserService:
             return cur.fetchone() is not None
 
 
-user_service = UserService()
+# Singleton removed - use dependency injection via get_user_service() in api/deps.py
+# For backward compatibility during migration
+_global_instance = None
+
+
+def get_user_service_instance() -> UserService:
+    """Get or create global user service instance.
+
+    This is a temporary helper for backward compatibility.
+    Prefer using FastAPI dependency injection via api/deps.py
+    """
+    global _global_instance
+    if _global_instance is None:
+        _global_instance = UserService()
+    return _global_instance
 

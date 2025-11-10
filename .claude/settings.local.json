@@ -24,7 +24,13 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(tasklist:*)",
-      "Bash(powershell -Command \"Get-Process -Id 10656 | Select-Object ProcessName, Id\")"
+      "Bash(powershell -Command \"Get-Process -Id 10656 | Select-Object ProcessName, Id\")",
+      "Bash(timeout 10 python:*)",
+      "Bash(__NEW_LINE__ cp app/domain/rag/domain_classifier.py app/domain/services/rag/classification/)",
+      "Bash(timeout 15 python:*)",
+      "Bash(timeout 30 python:*)",
+      "Bash(timeout 10 bash:*)",
+      "Bash(timeout 15 bash:*)"
     ],
     "deny": [],
     "ask": []

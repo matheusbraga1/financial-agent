@@ -7,21 +7,30 @@ from app.domain.ports import (
     ConversationPort,
     LLMPort,
 )
-from app.services.user_service import user_service, UserService
-from app.repositories.sqlite_conversation_repository import conversation_repository
-from app.application.chat_usecase import ChatUseCase
+# Clean Architecture imports
+from app.services.user_service import UserService  # TODO: Move to infrastructure
+from app.services.embedding_service import EmbeddingService  # Backward compatibility
+from app.services.vector_store_service import VectorStoreService
+from app.infrastructure.repositories.sqlite import conversation_repository
+from app.application.use_cases.chat import ChatUseCase
 
 
 def get_embedding_service() -> EmbeddingsPort:
-    # Import lazy para evitar custo em endpoints que não usam embeddings
-    from app.services.embedding_service import embedding_service
-    yield embedding_service
+    """Create new embedding service instance.
+
+    The heavy model is shared across instances via class variable,
+    so this is lightweight after first initialization.
+    """
+    yield EmbeddingService()
 
 
 def get_vector_store() -> VectorStorePort:
-    # Import lazy para evitar inicialização desnecessária
-    from app.services.vector_store_multidomain import vector_store_multidomain
-    yield vector_store_multidomain
+    """Create new vector store service instance.
+
+    Components (QdrantAdapter, HybridSearch, etc.) are created per instance,
+    but Qdrant connection is managed efficiently by the client.
+    """
+    yield VectorStoreService()
 
 
 def get_llm() -> LLMPort:
@@ -102,7 +111,11 @@ def get_conversation_repo() -> ConversationPort:
 
 
 def get_user_service() -> UserService:
-    yield user_service
+    """Create new user service instance.
+
+    Database connections are managed per-request via context manager.
+    """
+    yield UserService()
 
 
 def get_chat_usecase(

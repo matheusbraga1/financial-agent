@@ -36,9 +36,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.domain.documents.metadata_schema import DocumentMetadata, Department, DocType
 from app.domain.documents.document_processor import DocumentProcessor
-from app.services.embedding_service import embedding_service
+from app.services.embedding_service import get_embedding_service_instance
 from app.services.vector_store_multidomain import vector_store_multidomain as vector_store_service_extended
 from app.core.config import get_settings
+
+# Get service instances
+embedding_service = get_embedding_service_instance()
 
 # Setup logging
 logging.basicConfig(
