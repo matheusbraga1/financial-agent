@@ -50,6 +50,10 @@ class ChatResponse(BaseModel):
         le=1,
         description="Confiança agregada na resposta (0 a 1)",
     )
+    message_id: Optional[int] = Field(
+        default=None,
+        description="Identificador da mensagem do assistente (para feedback)",
+    )
     timestamp: datetime = Field(
         default_factory=datetime.now, description="Momento da resposta"
     )
@@ -72,6 +76,7 @@ class ChatResponse(BaseModel):
                 ],
                 "model_used": "llama3.1:8b",
                 "confidence": 0.82,
+                "message_id": 42,
                 "persisted": False,
                 "timestamp": "2025-10-30T10:30:00",
             }
@@ -80,6 +85,7 @@ class ChatResponse(BaseModel):
 
 
 class ChatHistoryMessage(BaseModel):
+    message_id: Optional[int] = Field(None, description="Identificador único da mensagem")
     role: str = Field(..., description="'user' ou 'assistant'")
     content: Optional[str] = Field(
         None, description="Mensagem do usuário (quando role=user)"
@@ -115,11 +121,13 @@ class ChatHistoryResponse(BaseModel):
                 "messages": [
                     {
                         "role": "user",
+                        "message_id": 10,
                         "content": "Como resetar senha?",
                         "timestamp": "2025-10-30T10:00:00",
                     },
                     {
                         "role": "assistant",
+                        "message_id": 11,
                         "answer": "Para resetar sua senha...",
                         "sources": [
                             {

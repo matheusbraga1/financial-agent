@@ -12,8 +12,8 @@ from app.models.chat import (
     SourceDocument,
 )
 from app.models.error import ErrorResponse
-from app.api.deps import get_conversation_repo, get_chat_usecase
-from app.domain.ports import ConversationPort
+from app.api.deps import get_conversation_repo, get_chat_usecase, get_vector_store
+from app.domain.ports import ConversationPort, VectorStorePort
 from app.api.security import get_current_user, get_optional_user
 
 
@@ -167,7 +167,44 @@ async def submit_feedback(
     message_id: str,
     rating: str,
     comment: str | None = None,
+    conv_repo: ConversationPort = Depends(get_conversation_repo),
+    vector_store: VectorStorePort = Depends(get_vector_store),
 ) -> Dict[str, str]:
+    try:
+        msg_id_int = int(message_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="message_id inválido",
+        )
+
+    record = conv_repo.get_message_by_id(msg_id_int)
+    if not record or record.get("session_id") != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Mensagem não encontrada para esta sessão",
+        )
+
+    conv_repo.add_feedback(session_id=session_id, message_id=msg_id_int, rating=rating, comment=comment)
+
+    doc_ids: list[str] = []
+    sources_json = record.get("sources_json")
+    if sources_json:
+        try:
+            parsed = json.loads(sources_json)
+            if isinstance(parsed, list):
+                doc_ids = [str(src.get("id")) for src in parsed if src.get("id")]
+        except Exception:
+            pass
+
+    helpful_values = {"positivo", "positive", "helpful", "bom", "boa", "upvote"}
+    helpful = rating.strip().lower() in helpful_values if rating else False
+
+    try:
+        vector_store.apply_feedback(doc_ids, helpful)
+    except Exception as err:
+        logger.warning(f"Não foi possível aplicar feedback aos documentos: {err}")
+
     logger.info(
         f"Feedback recebido | session={session_id} | message={message_id} | rating={rating} | comment={comment}"
     )
@@ -241,7 +278,7 @@ async def get_history(
             if role == "user":
                 messages.append(
                     ChatHistoryMessage(
-                        role="user", content=r.get("content"), timestamp=ts
+                        role="user", content=r.get("content"), timestamp=ts, message_id=r.get("id")
                     )
                 )
             else:
@@ -271,6 +308,7 @@ async def get_history(
                 messages.append(
                     ChatHistoryMessage(
                         role="assistant",
+                        message_id=r.get("id"),
                         answer=r.get("answer"),
                         sources=sources,
                         model_used=r.get("model_used"),

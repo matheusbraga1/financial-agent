@@ -40,9 +40,16 @@ class VectorStorePort(Protocol):
     def get_collection_info(self) -> Dict[str, Any]:
         ...
 
+    def record_usage(self, doc_ids: List[str]) -> None:
+        ...
+
+    def apply_feedback(self, doc_ids: List[str], helpful: bool) -> None:
+        ...
+
 
 class RAGPort(Protocol):
     model: str
+    vector_store: VectorStorePort
 
     async def generate_answer(
         self,
@@ -78,6 +85,15 @@ class LLMPort(Protocol):
     ) -> Iterable[str]:
         ...
 
+    def store_memory_from_sources(
+        self,
+        question: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        confidence: float,
+    ) -> None:
+        ...
+
 
 # Conversas / histÃ³rico
 class ConversationPort(Protocol):
@@ -97,10 +113,22 @@ class ConversationPort(Protocol):
         sources_json: Optional[str],
         model_used: Optional[str],
         confidence: Optional[float],
-    ) -> None:
+    ) -> int:
         ...
 
     def get_history(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        ...
+
+    def get_message_by_id(self, message_id: int) -> Optional[Dict[str, Any]]:
+        ...
+
+    def add_feedback(
+        self,
+        session_id: str,
+        message_id: int,
+        rating: str,
+        comment: Optional[str] = None,
+    ) -> int:
         ...
 
 

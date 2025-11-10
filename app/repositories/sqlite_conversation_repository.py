@@ -61,6 +61,19 @@ class SQLiteConversationRepository(ConversationPort):
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, timestamp);")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    message_id INTEGER,
+                    rating TEXT,
+                    comment TEXT,
+                    created_at TEXT
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_message ON feedback(message_id);")
             conn.commit()
 
     def _purge_if_needed(self, conn: sqlite3.Connection):
@@ -114,7 +127,7 @@ class SQLiteConversationRepository(ConversationPort):
         sources_json: Optional[str],
         model_used: Optional[str],
         confidence: Optional[float],
-    ) -> None:
+    ) -> int:
         with self._lock, self._connect() as conn:
             self._purge_if_needed(conn)
             cur = conn.cursor()
@@ -132,17 +145,45 @@ class SQLiteConversationRepository(ConversationPort):
                 ),
             )
             conn.commit()
+            return cur.lastrowid
 
     def get_history(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT role, content, answer, sources_json, model_used, confidence, timestamp "
+                "SELECT id, role, content, answer, sources_json, model_used, confidence, timestamp "
                 "FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
                 (session_id, limit),
             )
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
+    def get_message_by_id(self, message_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, session_id, role, content, answer, sources_json, model_used, confidence, timestamp "
+                "FROM messages WHERE id=?",
+                (message_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def add_feedback(
+        self,
+        session_id: str,
+        message_id: int,
+        rating: str,
+        comment: Optional[str] = None,
+    ) -> int:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO feedback(session_id, message_id, rating, comment, created_at) VALUES(?,?,?,?,?)",
+                (session_id, message_id, rating, comment, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return cur.lastrowid
 
 
 conversation_repository = SQLiteConversationRepository()

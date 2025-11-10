@@ -10,6 +10,7 @@ from qdrant_client.models import (
     MatchText,
 )
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 import logging
 import uuid
 
@@ -34,6 +35,19 @@ class VectorStoreService:
         self.collection_name = settings.qdrant_collection
         self._cross_encoder = None
         self._reranking_enabled = getattr(settings, "enable_reranking", True)
+
+    def _feedback_boost(self, payload: Optional[Dict[str, Any]]) -> float:
+        if not payload:
+            return 0.0
+        helpful = float(payload.get("helpful_votes", 0) or 0)
+        complaints = float(payload.get("complaints", 0) or 0)
+        usage = float(payload.get("usage_count", 0) or 0)
+        if helpful == 0 and complaints == 0 and usage == 0:
+            return 0.0
+        feedback_component = (helpful - complaints) / max(5.0, helpful + complaints + 1.0)
+        popularity_component = min(0.1, usage / 500.0)
+        boost = feedback_component + popularity_component
+        return max(-0.2, min(0.2, boost))
 
     def _get_cross_encoder(self):
         """Lazy loading do CrossEncoder."""
@@ -91,8 +105,12 @@ class VectorStoreService:
     ) -> str:
         doc_id = document_id or str(uuid.uuid4())
 
+        metadata = document.metadata or {}
         # Cria um campo de texto para busca lexical
         search_text = f"{document.title} {document.title} {document.title} {document.content}"
+        departments = metadata.get("departments") or (
+            [metadata.get("department")] if metadata.get("department") else []
+        )
 
         point = PointStruct(
             id=doc_id,
@@ -102,7 +120,18 @@ class VectorStoreService:
                 "category": document.category,
                 "content": document.content,
                 "search_text": search_text,
-                "metadata": document.metadata or {},
+                "metadata": metadata,
+                "department": metadata.get("department"),
+                "departments": departments,
+                "doc_type": metadata.get("doc_type"),
+                "tags": metadata.get("tags", []),
+                "source_id": metadata.get("source_id"),
+                "origin": metadata.get("origin"),
+                "confidence": metadata.get("confidence"),
+                "helpful_votes": int(metadata.get("helpful_votes", 0) or 0),
+                "complaints": int(metadata.get("complaints", 0) or 0),
+                "usage_count": int(metadata.get("usage_count", 0) or 0),
+                "last_used_at": metadata.get("last_used_at"),
             },
         )
 
@@ -354,6 +383,7 @@ class VectorStoreService:
                 + (scores["title_boost"] * 0.30)
                 + (scores.get("category_boost", 0.0) * 0.10)
             )
+            final_score += self._feedback_boost(scores.get("payload"))
             final_score = max(0.0, min(1.0, final_score))
             if score_threshold is None or final_score >= score_threshold:
                 final_results.append(
@@ -568,6 +598,70 @@ class VectorStoreService:
             "vector_size": vector_size,
             "exists": exists,
         }
+
+    def _chunk_ids(self, ids: List[str], chunk_size: int = 64):
+        for idx in range(0, len(ids), chunk_size):
+            yield ids[idx : idx + chunk_size]
+
+    def record_usage(self, doc_ids: List[str]) -> None:
+        if not doc_ids:
+            return
+        unique_ids = [str(_id) for _id in dict.fromkeys(doc_ids) if _id]
+        if not unique_ids:
+            return
+        timestamp = datetime.utcnow().isoformat()
+        try:
+            for batch in self._chunk_ids(unique_ids):
+                try:
+                    points = self.client.retrieve(
+                        collection_name=self.collection_name,
+                        ids=batch,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                except Exception as err:
+                    logger.debug(f"Não foi possível recuperar pontos para uso: {err}")
+                    continue
+                for point in points:
+                    usage = int((point.payload or {}).get("usage_count", 0) or 0) + 1
+                    self.client.set_payload(
+                        collection_name=self.collection_name,
+                        payload={"usage_count": usage, "last_used_at": timestamp},
+                        points=[point.id],
+                    )
+        except Exception as err:
+            logger.debug(f"Falha ao atualizar uso dos documentos: {err}")
+
+    def apply_feedback(self, doc_ids: List[str], helpful: bool) -> None:
+        if not doc_ids:
+            return
+        unique_ids = [str(_id) for _id in dict.fromkeys(doc_ids) if _id]
+        if not unique_ids:
+            return
+        field = "helpful_votes" if helpful else "complaints"
+        try:
+            for batch in self._chunk_ids(unique_ids):
+                try:
+                    points = self.client.retrieve(
+                        collection_name=self.collection_name,
+                        ids=batch,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                except Exception as err:
+                    logger.debug(f"Não foi possível recuperar pontos para feedback: {err}")
+                    continue
+                for point in points:
+                    current_payload = point.payload or {}
+                    new_value = int(current_payload.get(field, 0) or 0) + 1
+                    update = {field: new_value}
+                    self.client.set_payload(
+                        collection_name=self.collection_name,
+                        payload=update,
+                        points=[point.id],
+                    )
+        except Exception as err:
+            logger.debug(f"Falha ao aplicar feedback nos documentos: {err}")
 
 
 vector_store_service = VectorStoreService()

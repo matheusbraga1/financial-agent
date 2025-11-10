@@ -20,8 +20,8 @@ def get_embedding_service() -> EmbeddingsPort:
 
 def get_vector_store() -> VectorStorePort:
     # Import lazy para evitar inicialização desnecessária
-    from app.services.vector_store_service import vector_store_service
-    yield vector_store_service
+    from app.services.vector_store_multidomain import vector_store_multidomain
+    yield vector_store_multidomain
 
 
 def get_llm() -> LLMPort:

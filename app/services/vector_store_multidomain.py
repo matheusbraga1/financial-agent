@@ -208,6 +208,7 @@ class VectorStoreMultidomain(VectorStoreService):
                 + (scores["title_boost"] * 0.30)
                 + (scores.get("category_boost", 0.0) * 0.10)
             )
+            final_score += self._feedback_boost(scores.get("payload"))
             final_score = max(0.0, min(1.0, final_score))
             if score_threshold is None or final_score >= score_threshold:
                 final_results.append(

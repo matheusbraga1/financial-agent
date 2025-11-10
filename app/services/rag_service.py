@@ -12,10 +12,12 @@ import logging
 import asyncio
 import threading
 import os
+import hashlib
 from typing import List, Dict, Any, Optional, AsyncIterator, Tuple
 
 from app.core.config import get_settings
 from app.models.chat import ChatResponse, SourceDocument
+from app.models.document import DocumentCreate
 from app.domain.ports import (
     EmbeddingsPort,
     VectorStorePort,
@@ -148,6 +150,7 @@ class RAGService:
         # Componentes específicos de multi-domain
         self._domain_classifier = DomainClassifier()
         self._confidence_scorer = ConfidenceScorer()
+        self._memory_confidence_threshold = float(os.getenv("QA_MEMORY_MIN_CONFIDENCE", "0.55"))
 
         logger.info(f"RAG Service Multi-domain inicializado com modelo: {self.model}")
 
@@ -218,6 +221,70 @@ class RAGService:
                 if ans:
                     parts.append(f"Assistente: {ans}")
         return "\n".join(parts)
+
+    def _record_usage(self, documents: Optional[List[Dict[str, Any]]]) -> None:
+        """Atualiza estatísticas de uso dos documentos retornados."""
+        if not documents:
+            return
+        try:
+            doc_ids = [str(doc.get("id")) for doc in documents if doc.get("id")]
+            if doc_ids:
+                self.vector_store.record_usage(doc_ids)
+        except Exception as err:
+            logger.debug(f"Não foi possível atualizar uso dos documentos: {err}")
+
+    def _maybe_store_memory(
+        self,
+        question: str,
+        answer: str,
+        document_refs: Optional[List[Dict[str, Any]]],
+        detected_departments: Optional[List[str]],
+        confidence: float,
+    ) -> None:
+        """Armazena memória de QA no Qdrant quando a resposta é confiável."""
+        if (
+            not question
+            or not answer
+            or confidence < self._memory_confidence_threshold
+            or len(answer.strip()) < 40
+        ):
+            return
+
+        metadata = {
+            "doc_type": "qa_memory",
+            "department": (detected_departments or ["Geral"])[0],
+            "departments": detected_departments or [],
+            "tags": ["qa_memory"],
+            "source_ids": [ref.get("id") for ref in document_refs or [] if ref.get("id")],
+            "source_titles": [ref.get("title") for ref in document_refs or [] if ref.get("title")],
+            "confidence": confidence,
+            "origin": "chat_history",
+        }
+
+        memory_id = f"qa_memory_{hashlib.sha256(question.strip().lower().encode('utf-8')).hexdigest()[:24]}"
+        document = DocumentCreate(
+            title=question[:200],
+            category=metadata["department"] or "QA Memory",
+            content=answer,
+            metadata=metadata,
+        )
+
+        try:
+            vector = self.embedding_service.encode_document(document.title, document.content)
+            self.vector_store.add_document(document=document, vector=vector, document_id=memory_id)
+        except Exception as err:
+            logger.debug(f"Falha ao armazenar memória de QA: {err}")
+
+    def store_memory_from_sources(
+        self,
+        question: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        confidence: float,
+    ) -> None:
+        """Método público para armazenamento pós-processamento (streaming)."""
+        departments = self._domain_classifier.classify(question)
+        self._maybe_store_memory(question, answer, sources, departments, confidence)
 
     @retry_on_any_error(max_attempts=3)
     def _call_llm_sync(self, prompt: str) -> str:
@@ -309,6 +376,7 @@ class RAGService:
         if documents:
             for i, doc in enumerate(documents[:3]):
                 logger.info(f"  Doc {i+1}: '{doc.get('title')}' (score: {doc.get('score', 0):.4f})")
+        self._record_usage(documents)
 
         # 5. Clarificação proativa se necessário
         clar_text = self._clarifier.maybe_clarify(question, documents)
@@ -381,6 +449,17 @@ class RAGService:
                 except Exception:
                     pass
 
+        try:
+            self._maybe_store_memory(
+                question,
+                cleaned_markdown,
+                documents,
+                detected_departments,
+                confidence,
+            )
+        except Exception as mem_err:
+            logger.debug(f"Armazenamento de memória ignorado: {mem_err}")
+
         return ChatResponse(
             answer=cleaned_markdown,
             answer_html=html_answer,
@@ -440,6 +519,8 @@ class RAGService:
             else:
                 docs = self._retriever.retrieve(expanded_q, top_k, min_score)
 
+            self._record_usage(docs)
+
             # 4. Prepara fontes
             src_list: List[Dict[str, Any]] = []
             for d in docs or []:
@@ -486,6 +567,7 @@ class RAGService:
 
             # 8. Envia fontes antes dos tokens
             yield ("sources", src_list)
+            yield ("confidence", confidence)
 
             # 9. Stream de tokens via thread
             queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue()
