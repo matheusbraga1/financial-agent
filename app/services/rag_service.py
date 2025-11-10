@@ -245,6 +245,105 @@ class RAGService:
         except Exception as err:
             logger.debug(f"Não foi possível atualizar uso dos documentos: {err}")
 
+    def _apply_recency_boost(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Aplica boost de recência aos documentos baseado na data de modificação.
+
+        MELHORIA: Prioriza documentos mais recentes quando há títulos similares.
+
+        Args:
+            documents: Lista de documentos recuperados
+
+        Returns:
+            Lista de documentos com scores ajustados, re-ordenada
+        """
+        from datetime import datetime, timezone
+
+        if not documents or len(documents) < 2:
+            return documents
+
+        now = datetime.now(timezone.utc)
+        boosted_docs = []
+
+        for doc in documents:
+            # Extrair data de modificação dos metadados
+            updated_at = None
+            metadata = doc.get("metadata", {})
+
+            # Tentar pegar updated_at
+            if isinstance(metadata, dict):
+                updated_at_str = metadata.get("updated_at") or metadata.get("date_mod")
+                if updated_at_str:
+                    try:
+                        # Tentar parse de diferentes formatos
+                        if isinstance(updated_at_str, str):
+                            # ISO format: 2024-01-15T10:30:00
+                            if 'T' in updated_at_str:
+                                updated_at = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
+                            # MySQL format: 2024-01-15 10:30:00
+                            else:
+                                updated_at = datetime.strptime(updated_at_str, "%Y-%m-%d %H:%M:%S")
+                                updated_at = updated_at.replace(tzinfo=timezone.utc)
+                    except (ValueError, AttributeError) as e:
+                        logger.debug(f"Erro ao parsear data '{updated_at_str}': {e}")
+
+            # Calcular recency score (0.0 a 0.15 boost)
+            recency_boost = 0.0
+            if updated_at:
+                # Dias desde a última modificação
+                days_old = (now - updated_at).days
+
+                # Boost decrescente baseado na idade:
+                # - < 7 dias: +0.15 (muito recente)
+                # - 7-30 dias: +0.10 (recente)
+                # - 30-90 dias: +0.05 (moderado)
+                # - 90-180 dias: +0.02 (antigo)
+                # - > 180 dias: +0.00 (muito antigo)
+
+                if days_old < 7:
+                    recency_boost = 0.15
+                elif days_old < 30:
+                    recency_boost = 0.10
+                elif days_old < 90:
+                    recency_boost = 0.05
+                elif days_old < 180:
+                    recency_boost = 0.02
+                else:
+                    recency_boost = 0.0
+
+                logger.debug(
+                    f"Documento '{doc.get('title', 'unknown')[:50]}': "
+                    f"{days_old} dias antigo, boost={recency_boost:.3f}"
+                )
+
+            # Aplicar boost ao score original
+            original_score = doc.get("score", 0.0)
+            boosted_score = min(1.0, original_score + recency_boost)  # Cap em 1.0
+
+            # Criar cópia do documento com score atualizado
+            boosted_doc = doc.copy()
+            boosted_doc["score"] = boosted_score
+            boosted_doc["original_score"] = original_score  # Preservar score original
+            boosted_doc["recency_boost"] = recency_boost
+
+            boosted_docs.append(boosted_doc)
+
+        # Re-ordenar por score ajustado
+        boosted_docs.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+
+        # Log top 3 se houve mudanças significativas
+        if any(d.get("recency_boost", 0) > 0.05 for d in boosted_docs[:3]):
+            logger.info("Boost de recência aplicado - top 3 documentos:")
+            for i, doc in enumerate(boosted_docs[:3]):
+                logger.info(
+                    f"  {i+1}. '{doc.get('title', 'unknown')[:50]}' - "
+                    f"score: {doc.get('score', 0):.4f} "
+                    f"(original: {doc.get('original_score', 0):.4f}, "
+                    f"boost: +{doc.get('recency_boost', 0):.3f})"
+                )
+
+        return boosted_docs
+
     def _maybe_store_memory(
         self,
         question: str,
@@ -384,15 +483,20 @@ class RAGService:
         else:
             documents = self._retriever.retrieve(expanded_question, top_k, min_score)
 
-        logger.info(f"📚 Documentos recuperados: {len(documents)}")
+        logger.info(f"Documentos recuperados: {len(documents)}")
         if documents:
             for i, doc in enumerate(documents[:3]):
                 logger.info(f"  Doc {i+1}: '{doc.get('title')}' (score: {doc.get('score', 0):.4f})")
         self._record_usage(documents)
 
+        # 4.5 Aplicar boost de recência para priorizar documentos atualizados
+        if documents and len(documents) > 1:
+            documents = self._apply_recency_boost(documents)
+
         # 5. CrossEncoder reranking para melhor precisão
-        if self.enable_reranking and self._reranker and len(documents) > 1:
-            logger.info("🎯 Aplicando CrossEncoder reranking...")
+        # FIX Bug 3.5: Verificação consistente com stream_answer
+        if self.enable_reranking and self._reranker and documents and len(documents) > 1:
+            logger.info("Aplicando CrossEncoder reranking...")
             documents = self._reranker.rerank(
                 query=expanded_question,
                 documents=documents,
@@ -400,11 +504,24 @@ class RAGService:
                 rerank_weight=0.7     # 70% score do CrossEncoder
             )
             logger.info(
-                f"✓ Reranking concluído - top doc agora: '{documents[0].get('title')}' "
+                f"Reranking concluido - top doc agora: '{documents[0].get('title')}' "
                 f"(score: {documents[0].get('score', 0):.4f})"
             )
 
-        # 6. Clarificação proativa se necessário (e habilitada)
+        # 6. Verificar se documentos são relevantes (score mínimo)
+        # Se não há documentos OU todos com score muito baixo, informar ausência
+        if not documents:
+            logger.warning("AVISO: Nenhum documento encontrado - retornando resposta padrao")
+            return self._generate_no_context_response(question)
+
+        # Verificar se o melhor documento tem score muito baixo (< 0.4)
+        max_score = max(float(d.get('score', 0.0)) for d in documents) if documents else 0.0
+        if max_score < 0.4:
+            logger.warning(f"AVISO: Score máximo muito baixo ({max_score:.2f}) - sem artigos relevantes na base")
+            return self._generate_no_context_response(question)
+
+        # 7. Clarificação proativa se necessário (e habilitada)
+        # Apenas para scores médios (0.3-0.6) onde clarificação pode ajudar
         if self.enable_clarification:
             clar_text = self._clarifier.maybe_clarify(question, documents)
             if clar_text:
@@ -419,20 +536,15 @@ class RAGService:
                     confidence=0.0,
                 )
 
-        # 7. Se não há documentos, retorna resposta padrão
-        if not documents:
-            logger.warning("⚠️  Nenhum documento encontrado - retornando resposta padrão")
-            return self._generate_no_context_response(question)
-
         # 8. Calcula confiança multi-fatorial
         confidence_result = self._confidence_scorer.calculate_confidence(
             documents=documents,
             question=question,
             domain_confidence=domain_confidence
         )
-        # Extrai o score numérico do resultado
-        confidence = confidence_result.get('score', 0.0) if isinstance(confidence_result, dict) else confidence_result
-        logger.info(f"Confiança calculada: {confidence:.2f}")
+        # FIX Bug 3.2: ConfidenceScorer SEMPRE retorna dict, verificação desnecessária
+        confidence = confidence_result['score']
+        logger.info(f"Confiança: {confidence:.2f} ({confidence_result['level']}) - {confidence_result['message']}")
 
         # 9. Constrói contexto e prompt
         context = self._build_context(documents)
@@ -506,6 +618,7 @@ class RAGService:
         Emite tuplas (tipo, dado):
           - ("sources", List[dict]) - fontes antes dos tokens
           - ("token", str) - tokens da resposta
+          - ("confidence", float) - score de confiança
           - ("_error", str) - em caso de erro
           - ("_done", None) - ao final
 
@@ -516,6 +629,16 @@ class RAGService:
         Yields:
             Tuplas (tipo_evento, dados)
         """
+        # FIX Bug 3.1: Adicionar validação como em generate_answer
+        if not question or not question.strip():
+            yield ("_error", "Pergunta não pode estar vazia")
+            yield ("_done", None)
+            return
+
+        # FIX Bug 3.4: Inicializar variáveis no início para garantir disponibilidade
+        src_list: List[Dict[str, Any]] = []
+        confidence: float = 0.0
+
         try:
             # 1. Classificação de domínio
             detected_departments = self._domain_classifier.classify(question)
@@ -548,9 +671,14 @@ class RAGService:
 
             self._record_usage(docs)
 
+            # 3.5 Aplicar boost de recência para priorizar documentos atualizados
+            if docs and len(docs) > 1:
+                docs = self._apply_recency_boost(docs)
+
             # 4. CrossEncoder reranking para melhor precisão
+            # FIX Bug 3.5: Verificação consistente com generate_answer
             if self.enable_reranking and self._reranker and docs and len(docs) > 1:
-                logger.info("🎯 Aplicando CrossEncoder reranking (streaming)...")
+                logger.info("Aplicando CrossEncoder reranking (streaming)...")
                 docs = self._reranker.rerank(
                     query=expanded_q,
                     documents=docs,
@@ -558,8 +686,7 @@ class RAGService:
                     rerank_weight=0.7
                 )
 
-            # 5. Prepara fontes
-            src_list: List[Dict[str, Any]] = []
+            # 5. Prepara fontes (src_list já inicializada no início do método)
             for d in docs or []:
                 try:
                     src = SourceDocument(
@@ -575,7 +702,30 @@ class RAGService:
                 except Exception:
                     pass
 
-            # 6. Clarificação proativa se necessário (e habilitada)
+            # 6. Verificar se documentos são relevantes (score mínimo)
+            # Se não há docs, retorna resposta padrão
+            if not docs:
+                fb = self._generate_no_context_response(question)
+                # FIX Bug 4.1 e 4.2: Enviar sources vazias e confidence 0 para consistência
+                yield ("sources", [])
+                yield ("confidence", 0.0)
+                yield ("token", fb.answer)
+                yield ("_done", None)
+                return
+
+            # Verificar se o melhor documento tem score muito baixo (< 0.4)
+            max_score = max(float(d.get('score', 0.0)) for d in docs) if docs else 0.0
+            if max_score < 0.4:
+                logger.warning(f"AVISO: Score máximo muito baixo ({max_score:.2f}) - sem artigos relevantes (streaming)")
+                fb = self._generate_no_context_response(question)
+                yield ("sources", [])
+                yield ("confidence", 0.0)
+                yield ("token", fb.answer)
+                yield ("_done", None)
+                return
+
+            # 7. Clarificação proativa se necessário (e habilitada)
+            # Apenas para scores médios (0.3-0.6) onde clarificação pode ajudar
             if self.enable_clarification:
                 clar_text = self._clarifier.maybe_clarify(question, docs)
                 if clar_text:
@@ -584,23 +734,16 @@ class RAGService:
                     yield ("_done", None)
                     return
 
-            # 7. Se não há docs, retorna resposta padrão
-            if not docs:
-                fb = self._generate_no_context_response(question)
-                yield ("token", fb.answer)
-                yield ("_done", None)
-                return
-
             # 8. Calcula confiança
             confidence_result = self._confidence_scorer.calculate_confidence(
                 documents=docs,
                 question=question,
                 domain_confidence=domain_confidence
             )
-            # Extrai o score numérico do resultado
-            confidence = confidence_result.get('score', 0.0) if isinstance(confidence_result, dict) else confidence_result
+            # FIX Bug 3.2: Simplificar - ConfidenceScorer sempre retorna dict
+            confidence = confidence_result['score']
 
-            # 8. Constrói prompt
+            # 9. Constrói prompt (FIX Bug 3.3: Corrigir numeração)
             context = self._build_context(docs)
             history = self._build_history(history_rows) if history_rows else ""
             prompt = self._build_prompt(
@@ -611,11 +754,11 @@ class RAGService:
                 confidence=confidence
             )
 
-            # 9. Envia fontes antes dos tokens
+            # 10. Envia fontes antes dos tokens (FIX Bug 3.3: Atualizar numeração)
             yield ("sources", src_list)
             yield ("confidence", confidence)
 
-            # 10. Stream de tokens via thread
+            # 11. Stream de tokens via thread (FIX Bug 3.3: Atualizar numeração)
             queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue()
             loop = asyncio.get_running_loop()
 
@@ -628,13 +771,17 @@ class RAGService:
                             )
                     asyncio.run_coroutine_threadsafe(queue.put(("_done", None)), loop)
                 except Exception as e:
+                    logger.error("Erro no streaming do LLM", exc_info=True)
                     asyncio.run_coroutine_threadsafe(
                         queue.put(("_error", str(e))), loop
                     )
 
-            threading.Thread(target=_producer, daemon=True).start()
+            # FIX Bug 3.6: Manter referência da thread para debugging
+            producer_thread = threading.Thread(target=_producer, daemon=True, name="LLM-Stream-Producer")
+            producer_thread.start()
+            logger.debug(f"Thread de streaming iniciada: {producer_thread.name}")
 
-            # 11. Consome tokens da queue
+            # 12. Consome tokens da queue (FIX Bug 3.3: Atualizar numeração)
             while True:
                 kind, data = await queue.get()
                 yield (kind, data)

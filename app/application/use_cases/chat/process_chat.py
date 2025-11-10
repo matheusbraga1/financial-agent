@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 from typing import AsyncIterator, Optional, Dict, Any
+from datetime import datetime  # FIX Bug 2.1: Import adequado no topo do arquivo
 
 from app.models.chat import ChatResponse
 from app.domain.ports import RAGPort, ConversationPort
@@ -132,6 +133,7 @@ class ChatUseCase:
                 elif kind == "_error":
                     logger.error(f"Erro no streaming LLM: {data}")
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao gerar resposta.'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"  # FIX: Enviar done em erro
                     return
                 elif kind == "_done":
                     break
@@ -166,10 +168,17 @@ class ChatUseCase:
                         timeout=self._finalize_timeout,
                     )
                 except asyncio.TimeoutError:
+                    # FIX Bug 2.3: message_id pode estar disponível mesmo com timeout
                     logger.debug(
                         "Finalização do streaming continuará em background (session_id=%s)",
                         session,
                     )
+                    # Tenta recuperar o resultado parcial se disponível
+                    if finalize_task.done() and not finalize_task.cancelled():
+                        try:
+                            message_id = finalize_task.result()
+                        except Exception:
+                            pass
                 except Exception as finalize_err:
                     logger.warning(
                         "Erro ao finalizar streaming (session_id=%s): %s", session, finalize_err
@@ -177,8 +186,8 @@ class ChatUseCase:
 
             meta = {
                 'type': 'metadata',
-                'model_used': self._rag.model,
-                'timestamp': __import__('datetime').datetime.now().isoformat(),
+                'model_used': getattr(self._rag, 'model', 'unknown'),  # FIX Bug 2.2: Acesso seguro
+                'timestamp': datetime.now().isoformat(),  # FIX Bug 2.1: Usar import normal
                 'confidence': confidence_score,
                 'message_id': message_id,
             }

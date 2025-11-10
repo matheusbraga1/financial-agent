@@ -13,10 +13,18 @@ from app.services.vector_store_service import get_vector_store_instance
 from app.services.embedding_service import get_embedding_service_instance
 from app.models.document import DocumentCreate
 from app.core.config import get_settings
+from app.domain.value_objects.document_metadata import (
+    DocumentMetadata,
+    ChunkMetadata,
+    Department,
+    DocType,
+)
+from app.domain.services.rag.classification.domain_classifier import DomainClassifier
 
 # Get service instances
 vector_store_service = get_vector_store_instance()
 embedding_service = get_embedding_service_instance()
+domain_classifier = DomainClassifier()
 
 
 logging.basicConfig(
@@ -57,19 +65,57 @@ class GLPIIngestion:
         self.glpi = GLPIService()
         self.vector_store = vector_store_service
         self.embedding = embedding_service
-        self.chunk_size = 1000
-        self.chunk_overlap = 200
+        self.classifier = domain_classifier
+        # Optimized for all-MiniLM-L6-v2 (384 dim): ~700 chars with semantic overlap
+        self.chunk_size = 700
+        self.chunk_overlap = 100
 
-    def _split_into_chunks(self, text: str, title: str) -> List[str]:
+    def _assess_chunk_quality(self, chunk: str) -> float:
         """
-        Divide texto longo em chunks menores com sobreposição.
+        Avalia a qualidade de um chunk (0-1).
+
+        Args:
+            chunk: Texto do chunk
+
+        Returns:
+            Score de qualidade (0=baixa, 1=alta)
+        """
+        if not chunk or len(chunk) < 50:
+            return 0.0
+
+        # Penalizar chunks muito repetitivos (menus de navegação)
+        words = chunk.lower().split()
+        if len(words) > 0:
+            unique_ratio = len(set(words)) / len(words)
+            if unique_ratio < 0.3:  # Menos de 30% palavras únicas
+                return 0.3
+
+        # Penalizar chunks com muitos caracteres especiais
+        alpha_chars = sum(c.isalnum() or c.isspace() for c in chunk)
+        if len(chunk) > 0:
+            alpha_ratio = alpha_chars / len(chunk)
+            if alpha_ratio < 0.6:  # Menos de 60% caracteres alfanuméricos
+                return 0.4
+
+        # Bonus para chunks com sentenças completas
+        sentence_endings = chunk.count('. ') + chunk.count('! ') + chunk.count('? ')
+        if sentence_endings >= 2:
+            return 1.0
+
+        return 0.8  # Qualidade padrão OK
+
+    def _split_into_chunks(self, text: str, title: str) -> List[Dict[str, any]]:
+        """
+        Divide texto longo em chunks menores com sobreposição semântica.
+
+        MELHORIA: Inclui título em cada chunk e avalia qualidade.
 
         Args:
             text: Texto completo do documento
             title: Título do documento
 
         Returns:
-            Lista de chunks de texto
+            Lista de dicts com {'text': str, 'quality_score': float}
         """
         if not text or not isinstance(text, str):
             logger.warning(f"Documento '{title}' com texto inválido")
@@ -87,36 +133,56 @@ class GLPIIngestion:
             )
             text = text[:MAX_DOCUMENT_SIZE]
 
-        if len(text) <= self.chunk_size:
-            return [text]
+        # MELHORIA: Incluir título no contexto de cada chunk
+        title_prefix = f"[{title}]\n\n"
 
-        chunks: List[str] = []
+        # Se texto cabe em um chunk, retornar com título
+        if len(text) <= (self.chunk_size - len(title_prefix)):
+            chunk_with_title = title_prefix + text
+            quality = self._assess_chunk_quality(text)
+            if quality >= 0.4:  # Threshold mínimo de qualidade
+                return [{"text": chunk_with_title, "quality_score": quality}]
+            return []
+
+        chunks: List[Dict[str, any]] = []
         start = 0
         iterations = 0
-        step = max(1, self.chunk_size - self.chunk_overlap)
+        step = max(1, self.chunk_size - self.chunk_overlap - len(title_prefix))
         max_iterations = len(text) // step + 10
 
         while start < len(text) and iterations < max_iterations:
             iterations += 1
-            end = start + self.chunk_size
+            # Ajustar tamanho considerando o título
+            end = start + (self.chunk_size - len(title_prefix))
 
             if end < len(text):
                 snapped = False
-                for sep in [". ", "\n", " "]:
+                # MELHORIA: Separadores semânticos ordenados por prioridade
+                for sep in ["\n\n", ".\n", ". ", "! ", "? ", "\n", " "]:
                     last_sep = text.rfind(sep, start, end)
-                    if last_sep != -1 and last_sep > start:
+                    if last_sep != -1 and last_sep > start + 50:  # Mínimo 50 chars
                         end = last_sep + len(sep)
                         snapped = True
                         break
                 if not snapped:
                     end = min(end, len(text))
 
-            chunk = text[start:end].strip()
+            chunk_content = text[start:end].strip()
 
-            if chunk and len(chunk) >= 10:
-                chunks.append(chunk)
+            # Avaliar qualidade do chunk
+            quality = self._assess_chunk_quality(chunk_content)
+
+            # MELHORIA: Só incluir chunks com qualidade mínima
+            if chunk_content and len(chunk_content) >= 50 and quality >= 0.4:
+                chunk_with_title = title_prefix + chunk_content
+                chunks.append({
+                    "text": chunk_with_title,
+                    "quality_score": quality
+                })
             else:
-                logger.debug(f"Chunk muito curto ignorado: {len(chunk)} chars")
+                logger.debug(
+                    f"Chunk ignorado: len={len(chunk_content)}, quality={quality:.2f}"
+                )
 
             if end < len(text):
                 start = max(end - self.chunk_overlap, start + 1)
@@ -124,15 +190,164 @@ class GLPIIngestion:
                 break
 
         if iterations >= max_iterations and start < len(text):
-            chunks.append(text[start:].strip())
-            logger.info(
-                f"Documento '{title}' excedeu iterações máximas; resto anexado como último chunk"
-            )
+            remaining = text[start:].strip()
+            quality = self._assess_chunk_quality(remaining)
+            if len(remaining) >= 50 and quality >= 0.4:
+                chunk_with_title = title_prefix + remaining
+                chunks.append({
+                    "text": chunk_with_title,
+                    "quality_score": quality
+                })
+                logger.info(
+                    f"Documento '{title}' excedeu iterações máximas; resto anexado como último chunk"
+                )
 
+        avg_quality = sum(c["quality_score"] for c in chunks) / len(chunks) if chunks else 0
         logger.debug(
-            f"Documento '{title}' dividido em {len(chunks)} chunks válidos"
+            f"Documento '{title}' dividido em {len(chunks)} chunks (qualidade média: {avg_quality:.2f})"
         )
         return chunks
+
+    def _classify_department(self, title: str, content: str, glpi_category: str) -> Department:
+        """
+        Classifica o departamento do artigo baseado em título, conteúdo e categoria GLPI.
+
+        MELHORIA: Usa DomainClassifier para pré-classificar durante ingestão.
+
+        Args:
+            title: Título do artigo
+            content: Conteúdo completo (truncado para análise)
+            glpi_category: Categoria do GLPI
+
+        Returns:
+            Department enum
+        """
+        # Usar primeiros 500 chars do conteúdo para análise
+        sample = f"{title} {content[:500]}"
+
+        # Classificar usando o DomainClassifier
+        departments = self.classifier.classify(sample, top_n=1)
+
+        if departments:
+            return departments[0]
+
+        # Fallback: mapear categoria GLPI para departamento
+        category_lower = glpi_category.lower()
+        if any(kw in category_lower for kw in ["ti", "tecnologia", "sistema", "email", "senha"]):
+            return Department.TI
+        elif any(kw in category_lower for kw in ["rh", "recursos humanos", "férias", "ponto"]):
+            return Department.RH
+        elif any(kw in category_lower for kw in ["financeiro", "pagamento", "nota fiscal"]):
+            return Department.FINANCEIRO
+        elif any(kw in category_lower for kw in ["loteamento", "lote", "terreno"]):
+            return Department.LOTEAMENTO
+        elif any(kw in category_lower for kw in ["aluguel", "locação", "imóvel"]):
+            return Department.ALUGUEL
+        elif any(kw in category_lower for kw in ["jurídico", "contrato", "legal"]):
+            return Department.JURIDICO
+
+        return Department.GERAL
+
+    def _determine_doc_type(self, glpi_metadata: dict) -> DocType:
+        """
+        Determina o tipo de documento baseado nos metadados GLPI.
+
+        Args:
+            glpi_metadata: Metadados do GLPI (is_faq, category, etc.)
+
+        Returns:
+            DocType enum
+        """
+        if glpi_metadata.get("is_faq"):
+            return DocType.FAQ
+        # Por padrão, artigos GLPI são "article"
+        return DocType.ARTICLE
+
+    def _extract_tags(self, title: str, content: str, category: str) -> List[str]:
+        """
+        Extrai tags relevantes do título, conteúdo e categoria.
+
+        MELHORIA: Gera tags automaticamente para melhorar busca.
+
+        Args:
+            title: Título do artigo
+            content: Conteúdo completo
+            category: Categoria GLPI
+
+        Returns:
+            Lista de tags
+        """
+        tags = []
+
+        # Tag da categoria GLPI
+        if category and category != "Geral":
+            # Pegar subcategorias (e.g., "TI > Email > Config" -> ["TI", "Email", "Config"])
+            category_parts = [p.strip() for p in category.split(">")]
+            tags.extend(category_parts)
+
+        # Keywords importantes do título (palavras com 4+ chars)
+        title_words = [w.lower() for w in title.split() if len(w) >= 4 and w.isalpha()]
+        tags.extend(title_words[:5])  # Máximo 5 palavras do título
+
+        # Remover duplicatas mantendo ordem
+        seen = set()
+        unique_tags = []
+        for tag in tags:
+            tag_lower = tag.lower()
+            if tag_lower not in seen:
+                seen.add(tag_lower)
+                unique_tags.append(tag)
+
+        return unique_tags[:10]  # Máximo 10 tags
+
+    def _build_enhanced_metadata(self, article: dict) -> DocumentMetadata:
+        """
+        Constrói metadados enriquecidos usando DocumentMetadata.
+
+        MELHORIA: Usa schema adequado com classificação automática.
+
+        Args:
+            article: Artigo do GLPI (dict com id, title, content, category, metadata)
+
+        Returns:
+            DocumentMetadata completo
+        """
+        title = article.get("title", "Sem título")
+        content = article.get("content", "")
+        category = article.get("category", "Geral")
+        glpi_meta = article.get("metadata", {})
+
+        # Classificar departamento automaticamente
+        department = self._classify_department(title, content, category)
+
+        # Determinar tipo de documento
+        doc_type = self._determine_doc_type(glpi_meta)
+
+        # Extrair tags
+        tags = self._extract_tags(title, content, category)
+
+        # Construir DocumentMetadata
+        metadata = DocumentMetadata(
+            source_id=f"glpi_{article['id']}",
+            title=title,
+            department=department,
+            doc_type=doc_type,
+            category=category,  # Preservar categoria hierárquica do GLPI
+            tags=tags,
+            file_format="html",
+            created_at=glpi_meta.get("date_creation"),
+            updated_at=glpi_meta.get("date_mod"),
+            author=glpi_meta.get("source", "GLPI"),
+            version="1.0",
+            glpi_id=int(article['id']),
+            is_public=glpi_meta.get("visibility") == "public",
+        )
+
+        logger.debug(
+            f"Metadata criado: {title} -> Department={department}, DocType={doc_type}, Tags={len(tags)}"
+        )
+
+        return metadata
 
     def run_full_sync(
         self, include_private: bool = False, clear_existing: bool = False
@@ -172,60 +387,85 @@ class GLPIIngestion:
                 except Exception as e:
                     logger.warning(f"Falha ao recriar collection: {e}")
 
-            for article in articles:
+            for idx, article in enumerate(articles, 1):
                 article_title = article.get("title", "Sem título")
                 try:
-                    content_chunks = self._split_into_chunks(
+                    # MELHORIA: Construir metadados enriquecidos primeiro
+                    doc_metadata = self._build_enhanced_metadata(article)
+
+                    # MELHORIA: Dividir em chunks com qualidade e título incluído
+                    chunk_dicts = self._split_into_chunks(
                         article.get("content", ""), article_title
                     )
-                    if not content_chunks:
+                    if not chunk_dicts:
                         logger.warning(
-                            f"Nenhum chunk gerado para '{article_title}', ignorando"
+                            f"[{idx}/{stats['total_articles_glpi']}] Nenhum chunk gerado para '{article_title}', ignorando"
                         )
                         continue
 
                     chunks_indexed_for_article = 0
-                    for chunk in content_chunks:
+                    for chunk_idx, chunk_dict in enumerate(chunk_dicts):
+                        chunk_text = chunk_dict["text"]
+                        quality_score = chunk_dict["quality_score"]
+
                         try:
-                            vector = self.embedding.encode_document(
-                                title=article_title, content=chunk, title_weight=3
-                            )
+                            # MELHORIA: Usar encode_text direto, título já está no chunk_text
+                            vector = self.embedding.encode_text(chunk_text)
                         except Exception as embed_error:
                             logger.error(
-                                f"Erro ao gerar embedding: {embed_error}"
+                                f"Erro ao gerar embedding para chunk {chunk_idx}: {embed_error}"
                             )
-                            stats["articles_failed"] += 1
                             continue
 
                         try:
+                            # Criar ChunkMetadata completo
+                            chunk_metadata = ChunkMetadata.from_document_metadata(
+                                doc_metadata=doc_metadata,
+                                chunk_index=chunk_idx,
+                                total_chunks=len(chunk_dicts),
+                                text=chunk_text
+                            )
+
+                            # Adicionar quality_score ao metadata dict
+                            metadata_dict = chunk_metadata.model_dump()
+                            metadata_dict["quality_score"] = quality_score
+
+                            # Indexar no Qdrant
                             doc_id = self.vector_store.add_document(
                                 document=DocumentCreate(
                                     title=article_title,
-                                    category=article.get("category") or "Geral",
-                                    content=chunk,
-                                    metadata=article.get("metadata", {}),
+                                    category=doc_metadata.category or "Geral",
+                                    content=chunk_text,
+                                    metadata=metadata_dict,
                                 ),
                                 vector=vector,
                                 document_id=None,
                             )
-                            logger.debug(f"Chunk indexado com ID: {doc_id}")
+                            logger.debug(
+                                f"Chunk {chunk_idx+1}/{len(chunk_dicts)} indexado com ID: {doc_id} "
+                                f"(quality={quality_score:.2f}, dept={doc_metadata.department})"
+                            )
                             chunks_indexed_for_article += 1
                         except Exception as chunk_error:
                             logger.error(
-                                f"Erro ao processar chunk: {chunk_error}"
+                                f"Erro ao indexar chunk {chunk_idx}: {chunk_error}"
                             )
-                            stats["articles_failed"] += 1
 
                     if chunks_indexed_for_article > 0:
                         stats["articles_indexed"] += 1
                         stats["articles_processed"] += 1
                         stats["total_chunks_indexed"] += chunks_indexed_for_article
                         logger.info(
-                            f"Artigo indexado ({chunks_indexed_for_article}/{len(content_chunks)} chunk(s))"
+                            f"[{idx}/{stats['total_articles_glpi']}] '{article_title}' indexado "
+                            f"({chunks_indexed_for_article}/{len(chunk_dicts)} chunks, "
+                            f"dept={doc_metadata.department}, tags={len(doc_metadata.tags)})"
                         )
+                    else:
+                        stats["articles_failed"] += 1
+
                 except Exception as e:
                     stats["articles_failed"] += 1
-                    logger.error(f"Erro geral ao processar '{article_title}': {e}")
+                    logger.error(f"[{idx}/{stats['total_articles_glpi']}] Erro geral ao processar '{article_title}': {e}")
                     continue
 
             logger.info("\nVerificando resultado...")
@@ -276,6 +516,11 @@ class GLPIIngestion:
             raise
 
     def sync_single_article(self, article_id: int) -> bool:
+        """
+        Sincroniza um único artigo do GLPI usando metadados enriquecidos.
+
+        MELHORIA: Usa mesmo processo de chunking e metadata do sync completo.
+        """
         logger.info(f"Sincronizando artigo {article_id}...")
         try:
             article = self.glpi.get_article_by_id(article_id)
@@ -283,23 +528,62 @@ class GLPIIngestion:
                 logger.error(f"Artigo {article_id} não encontrado no GLPI")
                 return False
 
-            document = DocumentCreate(
-                title=article["title"],
-                category=article["category"],
-                content=article["content"],
+            # Construir metadados enriquecidos
+            doc_metadata = self._build_enhanced_metadata(article)
+
+            # Dividir em chunks com qualidade
+            chunk_dicts = self._split_into_chunks(
+                article.get("content", ""), article["title"]
             )
-            vector = self.embedding.encode_document(
-                title=document.title, content=document.content, title_weight=3
+
+            if not chunk_dicts:
+                logger.warning(f"Nenhum chunk gerado para artigo {article_id}")
+                return False
+
+            # Indexar cada chunk
+            chunks_indexed = 0
+            for chunk_idx, chunk_dict in enumerate(chunk_dicts):
+                chunk_text = chunk_dict["text"]
+                quality_score = chunk_dict["quality_score"]
+
+                # Gerar embedding (título já está no chunk)
+                vector = self.embedding.encode_text(chunk_text)
+
+                # Criar ChunkMetadata
+                chunk_metadata = ChunkMetadata.from_document_metadata(
+                    doc_metadata=doc_metadata,
+                    chunk_index=chunk_idx,
+                    total_chunks=len(chunk_dicts),
+                    text=chunk_text
+                )
+
+                metadata_dict = chunk_metadata.model_dump()
+                metadata_dict["quality_score"] = quality_score
+
+                # Indexar
+                doc_id = self.vector_store.add_document(
+                    document=DocumentCreate(
+                        title=article["title"],
+                        category=doc_metadata.category or "Geral",
+                        content=chunk_text,
+                        metadata=metadata_dict,
+                    ),
+                    vector=vector,
+                    document_id=None,
+                )
+                logger.debug(f"Chunk {chunk_idx+1} indexado com ID: {doc_id}")
+                chunks_indexed += 1
+
+            logger.info(
+                f"Artigo {article_id} sincronizado com sucesso "
+                f"({chunks_indexed} chunks, dept={doc_metadata.department})"
             )
-            doc_id = self.vector_store.add_document(
-                document=document,
-                vector=vector,
-                document_id=f"glpi_{article['id']}",
-            )
-            logger.info(f"Artigo sincronizado com ID: {doc_id}")
             return True
+
         except Exception as e:
-            logger.error(f"Erro ao sincronizar artigo: {e}")
+            logger.error(f"Erro ao sincronizar artigo {article_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 

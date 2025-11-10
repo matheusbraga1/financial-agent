@@ -92,20 +92,46 @@ async def chat_stream(
     usecase = Depends(get_chat_usecase),
     current_user = Depends(get_optional_user),
 ) -> StreamingResponse:
+    # FIX Bug 1.2: Adicionar logging como no endpoint não-stream
+    logger.info(
+        f"Nova requisição de chat stream | session_id={request.session_id} | "
+        f"question_length={len(request.question) if request.question else 0}"
+    )
+
     async def generate():
         try:
-            if not request.question or len(request.question.strip()) < 3:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Pergunta muito curta.'}, ensure_ascii=False)}\n\n"
+            # FIX Bug 1.1: Validação segura - verifica None primeiro antes de chamar strip()
+            if not request.question:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Pergunta não pode estar vazia.'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
+
+            if len(request.question.strip()) < 3:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Pergunta muito curta. Digite pelo menos 3 caracteres.'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
+
             async for chunk in usecase.stream_sse(
                 question=request.question,
                 session_id=request.session_id,
                 current_user=current_user,
             ):
                 yield chunk
+
+        # FIX Bug 5.1: Tratamento específico de erros
+        except HTTPException as http_err:
+            logger.warning(f"Erro HTTP no streaming: {http_err.detail}")
+            yield f"data: {json.dumps({'type': 'error', 'message': http_err.detail}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except ValueError as val_err:
+            logger.warning(f"Erro de validação no streaming: {val_err}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(val_err)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
-            logger.error(f"Erro no streaming: {e}", exc_info=True)
+            logger.error(f"Erro inesperado no streaming: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao gerar resposta. Tente novamente.'}, ensure_ascii=False)}\n\n"
+            # FIX Bug 5.2: SEMPRE enviar done event mesmo em erro
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(
         generate(),

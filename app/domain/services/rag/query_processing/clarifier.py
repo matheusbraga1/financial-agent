@@ -22,15 +22,15 @@ class Clarifier:
 
     def _needs_clarification(self, question: str, documents: Optional[List[Dict[str, any]]] = None) -> bool:
         """
-        Determina se a pergunta precisa de clarificação.
+        Determina se a pergunta precisa de clarificação de forma INTELIGENTE.
 
-        Critérios:
-        - Pergunta muito curta (≤ 3 palavras)
-        - Termos genéricos detectados
-        - Nenhum documento encontrado
-        - Documentos com scores muito baixos (< 0.3)
-        - Múltiplos tópicos diferentes encontrados (divergência)
-        - Baixa confiança geral (< 0.4)
+        MELHORIA: Evita loops e é mais permissivo quando há documentos relevantes.
+
+        Critérios PRIORITÁRIOS (ordem importa):
+        1. Se tem documentos com score alto (≥ 0.6) → NÃO clarifica
+        2. Se nenhum documento → clarifica
+        3. Se documentos com scores muito baixos (< 0.4) → clarifica
+        4. Se pergunta muito genérica E scores médios (0.4-0.6) → clarifica
         """
         if not question or not question.strip():
             return False
@@ -38,66 +38,98 @@ class Clarifier:
         question_lower = question.strip().lower()
         words = question_lower.split()
 
-        # Termos genéricos que indicam necessidade de clarificação
-        generic_terms = {
-            'ajuda', 'ajudar', 'help', 'suporte', 'dúvida', 'duvida',
-            'preciso', 'necessito', 'quero', 'como', 'o que', 'qual',
-            'informação', 'informacao', 'problema', 'erro', 'acesso',
-            'configurar', 'configuração', 'configuracao', 'sistema',
-            'fazer', 'usar', 'utilizar', 'funciona', 'funcionalidade'
+        # PRIORIDADE 1: Se há documentos com score alto, NÃO pede clarificação
+        # Isso evita loops e permite que o usuário complemente respostas
+        if documents and len(documents) > 0:
+            try:
+                max_score = max(float(d.get('score', 0.0)) for d in documents)
+                top3_avg = sum(float(d.get('score', 0.0)) for d in documents[:3]) / min(len(documents), 3)
+
+                logger.info(f"[Clarifier] Avaliando documentos: max_score={max_score:.4f}, top3_avg={top3_avg:.4f}")
+
+                # Se o score máximo é bom (≥ 0.6), confiar nos documentos
+                if max_score >= 0.6:
+                    logger.info(f"[Clarifier] Score alto ({max_score:.2f}) - SEM clarificação")
+                    return False
+
+                # Se top 3 tem média boa (≥ 0.5), também confiar
+                if top3_avg >= 0.5:
+                    logger.info(f"[Clarifier] Score médio dos top3 bom ({top3_avg:.2f}) - SEM clarificação")
+                    return False
+
+                # Se scores são baixos (<0.4), verificar outros critérios
+                if max_score < 0.4:
+                    logger.debug(f"Score máximo baixo: {max_score:.2f} - pode precisar clarificação")
+                    # Continue verificando outros critérios
+                else:
+                    # Score entre 0.4-0.6: verificar se pergunta é muito genérica
+                    # Se não for muito genérica, aceitar
+                    if len(words) >= 4:  # Pelo menos 4 palavras já dá contexto
+                        logger.debug(f"Score moderado ({max_score:.2f}) e pergunta tem contexto - sem clarificação")
+                        return False
+
+            except Exception as e:
+                logger.warning(f"Erro ao calcular scores: {e}")
+
+        # PRIORIDADE 2: Sem documentos encontrados
+        # NÃO pede clarificação - deixa o RAG informar que não há artigos
+        if not documents or len(documents) == 0:
+            logger.debug("Nenhum documento encontrado - RAG informará ausência de artigos")
+            return False
+
+        # PRIORIDADE 3: Documentos com scores MUITO baixos (<0.4)
+        # NÃO pede clarificação - não há artigos relevantes na base
+        try:
+            max_score = max(float(d.get('score', 0.0)) for d in documents)
+            if max_score < 0.4:
+                logger.debug(f"Score muito baixo ({max_score:.2f}) - RAG informará ausência de artigos relevantes")
+                return False
+        except:
+            return False
+
+        # PRIORIDADE 3.5: Scores baixos mas não mínimos (0.4-0.55)
+        # AQUI SIM pede clarificação para tentar melhorar a busca
+        try:
+            max_score = max(float(d.get('score', 0.0)) for d in documents)
+            if max_score < 0.55:
+                logger.debug(f"Score baixo ({max_score:.2f}) - pode precisar clarificação")
+                # Continue verificando outros critérios
+        except:
+            pass
+
+        # PRIORIDADE 4: Verificar se pergunta é MUITO genérica
+        # Termos que sozinhos não significam nada
+        ultra_generic = {
+            'ajuda', 'help', 'suporte', 'dúvida', 'duvida', 'problema',
+            'informação', 'informacao'
         }
 
-        # Critério 1: Pergunta muito curta (≤ 3 palavras)
-        if len(words) <= 3:
+        # Remove stopwords
+        stopwords = {'de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'para', 'com', 'não', 'nao', 'é', 'como'}
+        content_words = [w for w in words if w not in stopwords and len(w) > 2]
+
+        # Se tem apenas 1 palavra de conteúdo E é ultra-genérica
+        if len(content_words) == 1 and content_words[0] in ultra_generic:
+            logger.debug(f"Apenas termo ultra-genérico: {content_words[0]}")
+            return True
+
+        # Se a pergunta inteira tem ≤ 2 palavras (muito curta)
+        if len(words) <= 2:
             logger.debug(f"Pergunta muito curta: {len(words)} palavras")
             return True
 
-        # Critério 2: Pergunta contém apenas termos genéricos
-        # Remove stopwords comuns
-        stopwords = {'de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'para', 'com', 'não', 'nao'}
-        content_words = [w for w in words if w not in stopwords and len(w) > 2]
-
-        if len(content_words) <= 2:
-            # Muito poucas palavras de conteúdo
-            logger.debug(f"Poucas palavras de conteúdo: {content_words}")
-            return True
-
-        # Verifica se a maioria das palavras é genérica
-        generic_count = sum(1 for w in content_words if w in generic_terms)
-        if generic_count >= len(content_words) * 0.6:  # 60% genéricas
-            logger.debug(f"Muitos termos genéricos: {generic_count}/{len(content_words)}")
-            return True
-
-        # Critério 3: Sem documentos
-        if not documents or len(documents) == 0:
-            logger.debug("Nenhum documento encontrado")
-            return True
-
-        # Critério 4: Scores muito baixos (< 0.3)
-        try:
-            max_score = max(float(d.get('score', 0.0)) for d in documents)
-            avg_score = sum(float(d.get('score', 0.0)) for d in documents[:3]) / min(len(documents), 3)
-
-            if max_score < 0.3:
-                logger.debug(f"Score máximo muito baixo: {max_score:.2f}")
-                return True
-
-            if avg_score < 0.25:
-                logger.debug(f"Score médio muito baixo: {avg_score:.2f}")
-                return True
-        except Exception as e:
-            logger.warning(f"Erro ao calcular scores: {e}")
-            return True
-
-        # Critério 5: Divergência de tópicos (categorias muito diferentes)
-        if len(documents) >= 3:
-            categories = [d.get('category', '').lower() for d in documents[:3]]
+        # PRIORIDADE 5: Divergência EXTREMA de tópicos
+        # Só considera se houver categorias COMPLETAMENTE diferentes
+        if len(documents) >= 5:
+            categories = [d.get('category', '').lower() for d in documents[:5]]
             unique_cats = set(cat for cat in categories if cat)
-            # Se há 3+ categorias diferentes nos top 3 docs, pode ser ambíguo
-            if len(unique_cats) >= 3:
-                logger.debug(f"Múltiplas categorias detectadas: {unique_cats}")
+            # Apenas se TODOS os top 5 são de categorias diferentes
+            if len(unique_cats) == 5:
+                logger.debug(f"Divergência extrema: todas categorias diferentes: {unique_cats}")
                 return True
 
+        # Se chegou aqui, não precisa clarificação
+        logger.debug("Pergunta tem contexto suficiente - sem clarificação")
         return False
 
     def _generate_smart_clarification(self, question: str, documents: Optional[List[Dict[str, any]]] = None) -> str:
@@ -213,6 +245,6 @@ RESPOSTA:"""
         if not self._needs_clarification(question, documents):
             return None
 
-        logger.info(f"🤔 Clarificação necessária para: '{question}'")
+        logger.info(f"[Clarifier] Clarificacao necessaria para: '{question}'")
         return self._generate_smart_clarification(question, documents)
 
