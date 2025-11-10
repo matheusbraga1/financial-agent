@@ -30,11 +30,14 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.1:8b"
     ollama_timeout: int = 120
 
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_dimension: int = 384
+    embedding_model: str = "intfloat/multilingual-e5-large"
+    embedding_dimension: int = 1024
 
-    top_k_results: int = 10
-    min_similarity_score: float = 0.18
+    # RAG Search Parameters (otimizado após testes de precisão)
+    top_k_results: int = 15  # Aumentado de 10 para capturar mais docs relevantes
+    min_similarity_score: float = 0.12  # Reduzido de 0.18 para ser menos restritivo
+    fallback_min_score: float = 0.05  # Threshold para busca fallback
+    enable_query_expansion: bool = True  # Expandir queries com sinônimos
 
     log_level: str = "INFO"
 
