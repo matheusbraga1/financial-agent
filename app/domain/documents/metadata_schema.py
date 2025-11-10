@@ -96,8 +96,8 @@ class ChunkMetadata(BaseModel):
         return cls(
             source_id=doc_metadata.source_id,
             title=doc_metadata.title,
-            department=doc_metadata.department.value,
-            doc_type=doc_metadata.doc_type.value,
+            department=doc_metadata.department,
+            doc_type=doc_metadata.doc_type,
             category=doc_metadata.category,
             tags=doc_metadata.tags,
             file_format=doc_metadata.file_format,
