@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPBearer
+from contextlib import asynccontextmanager
 import logging
 import uuid
 
@@ -21,6 +22,27 @@ security_scheme = HTTPBearer()
 setup_logging()
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info(f"Iniciando {settings.app_name} v{settings.app_version}")
+    logger.info(f"Modo Debug: {settings.debug}")
+    logger.info(f"Modelo LLM: {settings.ollama_model}")
+    logger.info(f"Collection: {settings.qdrant_collection}")
+
+    # Validação de segurança para JWT Secret
+    if settings.jwt_secret == "change-me-in-.env":
+        logger.warning("⚠️  ATENÇÃO: JWT_SECRET está usando valor padrão!")
+        if not settings.debug:
+            logger.error("❌ Configure JWT_SECRET no arquivo .env para produção!")
+            raise ValueError("JWT_SECRET não configurado para ambiente de produção")
+
+    yield
+
+    # Shutdown
+    logger.info("Encerrando aplicação...")
 
 
 tags_metadata = [
@@ -74,6 +96,7 @@ tags_metadata = [
 ]
 
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.app_name,
     version=settings.app_version,
     description="API REST para sistema de chat inteligente com busca contextualizada em documentos GLPI usando RAG (Retrieval Augmented Generation).",
@@ -169,26 +192,6 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"Iniciando {settings.app_name} v{settings.app_version}")
-    logger.info(f"Modo Debug: {settings.debug}")
-    logger.info(f"Modelo LLM: {settings.ollama_model}")
-    logger.info(f"Collection: {settings.qdrant_collection}")
-
-    # Validação de segurança para JWT Secret
-    if settings.jwt_secret == "change-me-in-.env":
-        logger.warning("⚠️  ATENÇÃO: JWT_SECRET está usando valor padrão!")
-        if not settings.debug:
-            logger.error("❌ Configure JWT_SECRET no arquivo .env para produção!")
-            raise ValueError("JWT_SECRET não configurado para ambiente de produção")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Encerrando aplicação...")
 
 
 @app.get("/", tags=["Root"])

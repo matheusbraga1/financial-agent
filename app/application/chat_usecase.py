@@ -70,15 +70,18 @@ class ChatUseCase:
         if current_user:
             try:
                 sources_json = json.dumps([s.model_dump() for s in resp.sources], ensure_ascii=False)
-                self._conversations.add_assistant_message(
+                message_id = self._conversations.add_assistant_message(
                     session_id=session,
                     answer=resp.answer,
                     sources_json=sources_json,
                     model_used=resp.model_used,
                     confidence=getattr(resp, "confidence", None),
                 )
+                resp.message_id = message_id
             except Exception as e:
                 logger.warning(f"Falha ao persistir resposta (não bloqueante): {e}")
+        else:
+            resp.message_id = None
 
         return resp
 
@@ -106,6 +109,8 @@ class ChatUseCase:
 
         full_answer_parts: list[str] = []
         src_list: list[dict] | None = None
+        confidence_score: float = 0.0
+        message_id: Optional[int] = None
 
         try:
             async for kind, data in self._rag.stream_answer(
@@ -117,6 +122,9 @@ class ChatUseCase:
                 elif kind == "sources":
                     src_list = data
                     yield f"data: {json.dumps({'type': 'sources', 'sources': data}, ensure_ascii=False)}\n\n"
+                elif kind == "confidence":
+                    confidence_score = float(data)
+                    yield f"data: {json.dumps({'type': 'confidence', 'score': confidence_score}, ensure_ascii=False)}\n\n"
                 elif kind == "_error":
                     logger.error(f"Erro no streaming LLM: {data}")
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao gerar resposta.'}, ensure_ascii=False)}\n\n"
@@ -129,21 +137,35 @@ class ChatUseCase:
                 try:
                     assembled = "".join(full_answer_parts)
                     sources_json = json.dumps(src_list or [], ensure_ascii=False)
-                    self._conversations.add_assistant_message(
+                    message_id = self._conversations.add_assistant_message(
                         session_id=session,
                         answer=assembled,
                         sources_json=sources_json,
                         model_used=self._rag.model,
-                        confidence=0.0,
+                        confidence=confidence_score,
                     )
                 except Exception as _e:
                     logger.warning(f"Falha ao persistir histórico (stream): {_e}")
+                    message_id = None
+            else:
+                message_id = None
+
+            try:
+                self._rag.store_memory_from_sources(
+                    question=question,
+                    answer=assembled,
+                    sources=src_list or [],
+                    confidence=confidence_score,
+                )
+            except Exception as mem_err:
+                logger.debug(f"Não foi possível armazenar memória após streaming: {mem_err}")
 
             meta = {
                 'type': 'metadata',
                 'model_used': self._rag.model,
                 'timestamp': __import__('datetime').datetime.now().isoformat(),
-                'confidence': 0.0,
+                'confidence': confidence_score,
+                'message_id': message_id,
             }
             if current_user and session:
                 meta['session_id'] = session
