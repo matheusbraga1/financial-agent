@@ -13,6 +13,8 @@ import asyncio
 import threading
 import os
 import hashlib
+import uuid
+import re
 from typing import List, Dict, Any, Optional, AsyncIterator, Tuple
 
 from app.core.config import get_settings
@@ -245,6 +247,51 @@ class RAGService:
         except Exception as err:
             logger.debug(f"Não foi possível atualizar uso dos documentos: {err}")
 
+    def _normalize_documents(self, documents: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Garante títulos e snippets descritivos para cada documento."""
+        normalized: List[Dict[str, Any]] = []
+        for raw in documents or []:
+            doc = dict(raw or {})
+            metadata = doc.get("metadata") or {}
+
+            title = (doc.get("title") or metadata.get("title") or metadata.get("source_title") or '').strip()
+            if not title:
+                title = "Documento sem título"
+
+            category = (doc.get("category") or metadata.get("category") or metadata.get("doc_type") or '').strip()
+            snippet = self._build_snippet(title, doc.get("content"), metadata)
+
+            doc.update({
+                "title": title,
+                "category": category,
+                "snippet": snippet,
+                "metadata": metadata,
+            })
+            normalized.append(doc)
+        return normalized
+
+    def _build_snippet(self, title: str, content: Optional[str], metadata: Dict[str, Any]) -> str:
+        highlights: List[str] = []
+        department = metadata.get("department")
+        section = metadata.get("section") or metadata.get("source_section")
+
+        if department:
+            highlights.append(f"[{department}]")
+        if section:
+            highlights.append(section)
+
+        text = (content or '').strip()
+        if text:
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+            excerpt = ' '.join(sentences[:2]) if sentences else text[:280]
+        else:
+            excerpt = title
+
+        snippet_body = ' '.join(filter(None, highlights + [excerpt])).strip()
+        if len(snippet_body) > 420:
+            snippet_body = snippet_body[:420].rsplit(' ', 1)[0] + '...'
+        return snippet_body
+
     def _apply_recency_boost(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Aplica boost de recência aos documentos baseado na data de modificação.
@@ -372,7 +419,9 @@ class RAGService:
             "origin": "chat_history",
         }
 
-        memory_id = f"qa_memory_{hashlib.sha256(question.strip().lower().encode('utf-8')).hexdigest()[:24]}"
+        memory_key = f"qa_memory_{hashlib.sha256(question.strip().lower().encode('utf-8')).hexdigest()[:24]}"
+        qdrant_point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, memory_key))
+        metadata["memory_key"] = memory_key
         document = DocumentCreate(
             title=question[:200],
             category=metadata["department"] or "QA Memory",
@@ -382,7 +431,7 @@ class RAGService:
 
         try:
             vector = self.embedding_service.encode_document(document.title, document.content)
-            self.vector_store.add_document(document=document, vector=vector, document_id=memory_id)
+            self.vector_store.add_document(document=document, vector=vector, document_id=qdrant_point_id)
         except Exception as err:
             logger.debug(f"Falha ao armazenar memória de QA: {err}")
 
@@ -508,6 +557,9 @@ class RAGService:
                 f"(score: {documents[0].get('score', 0):.4f})"
             )
 
+
+        documents = self._normalize_documents(documents)
+
         # 6. Verificar se documentos são relevantes (score mínimo)
         # Se não há documentos OU todos com score muito baixo, informar ausência
         if not documents:
@@ -580,8 +632,10 @@ class RAGService:
                             title=d.get("title") or "",
                             category=d.get("category") or "",
                             score=max(0.0, min(1.0, float(d.get("score", 0.0)))),
-                            snippet=(d.get("content") or "").strip()[:240] + (
-                                "..." if d.get("content") and len(d.get("content")) > 240 else ""
+                            snippet=d.get("snippet") or self._build_snippet(
+                                d.get("title") or "",
+                                d.get("content"),
+                                d.get("metadata") or {},
                             ),
                         )
                     )
@@ -638,6 +692,7 @@ class RAGService:
         # FIX Bug 3.4: Inicializar variáveis no início para garantir disponibilidade
         src_list: List[Dict[str, Any]] = []
         confidence: float = 0.0
+        docs: List[Dict[str, Any]] = []
 
         try:
             # 1. Classificação de domínio
@@ -694,8 +749,10 @@ class RAGService:
                         title=d.get("title") or "",
                         category=d.get("category") or "",
                         score=float(d.get("score", 0.0)),
-                        snippet=(d.get("content") or "").strip()[:240] + (
-                            "..." if d.get("content") and len(d.get("content")) > 240 else ""
+                        snippet=d.get("snippet") or self._build_snippet(
+                            d.get("title") or "",
+                            d.get("content"),
+                            d.get("metadata") or {},
                         ),
                     )
                     src_list.append(src.model_dump())
@@ -723,6 +780,9 @@ class RAGService:
                 yield ("token", fb.answer)
                 yield ("_done", None)
                 return
+
+
+            docs = self._normalize_documents(docs)
 
             # 7. Clarificação proativa se necessário (e habilitada)
             # Apenas para scores médios (0.3-0.6) onde clarificação pode ajudar

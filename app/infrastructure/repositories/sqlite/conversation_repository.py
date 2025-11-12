@@ -185,6 +185,51 @@ class SQLiteConversationRepository(ConversationPort):
             conn.commit()
             return cur.lastrowid
 
+    def get_user_sessions(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            # Get conversations with message count
+            cur.execute(
+                """
+                SELECT
+                    c.session_id,
+                    c.user_id,
+                    c.created_at,
+                    COUNT(m.id) as message_count,
+                    (
+                        SELECT COALESCE(content, answer, 'Nova conversa')
+                        FROM messages
+                        WHERE session_id = c.session_id
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    ) as last_message
+                FROM conversations c
+                LEFT JOIN messages m ON c.session_id = m.session_id
+                WHERE c.user_id = ? AND c.user_id IS NOT NULL AND c.user_id != ''
+                GROUP BY c.session_id, c.user_id, c.created_at
+                ORDER BY c.created_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_conversation(self, session_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            # Check if conversation exists
+            cur.execute("SELECT 1 FROM conversations WHERE session_id=?", (session_id,))
+            if cur.fetchone() is None:
+                return False
+
+            # Delete in order: feedback, messages, conversation
+            cur.execute("DELETE FROM feedback WHERE session_id=?", (session_id,))
+            cur.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+            cur.execute("DELETE FROM conversations WHERE session_id=?", (session_id,))
+            conn.commit()
+            return True
+
 
 conversation_repository = SQLiteConversationRepository()
 

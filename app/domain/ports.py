@@ -131,6 +131,12 @@ class ConversationPort(Protocol):
     ) -> int:
         ...
 
+    def get_user_sessions(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        ...
+
+    def delete_conversation(self, session_id: str) -> bool:
+        ...
+
 
 # RAG subcomponentes (para SRP e fÃ¡cil substituiÃ§Ã£o)
 class QueryExpanderPort(Protocol):

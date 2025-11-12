@@ -146,3 +146,48 @@ class ChatHistoryResponse(BaseModel):
         }
     )
 
+
+class SessionInfo(BaseModel):
+    session_id: str = Field(..., description="Identificador único da sessão")
+    created_at: datetime = Field(..., description="Data de criação da sessão")
+    message_count: int = Field(default=0, ge=0, description="Número de mensagens na sessão")
+    last_message: str = Field(default="Nova conversa", description="Última mensagem da conversa (user ou assistant)")
+
+    model_config = ConfigDict(
+        protected_namespaces=(),
+        json_schema_extra={
+            "example": {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "created_at": "2025-10-30T10:00:00",
+                "message_count": 5,
+                "last_message": "Como resetar minha senha?",
+            }
+        }
+    )
+
+
+class SessionsResponse(BaseModel):
+    sessions: List[SessionInfo] = Field(default_factory=list, description="Lista de sessões do usuário")
+    total: int = Field(..., ge=0, description="Total de sessões retornadas")
+
+    model_config = ConfigDict(
+        protected_namespaces=(),
+        json_schema_extra={
+            "example": {
+                "sessions": [
+                    {
+                        "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "created_at": "2025-10-30T10:00:00",
+                        "message_count": 5,
+                    },
+                    {
+                        "session_id": "660e8400-e29b-41d4-a716-446655440001",
+                        "created_at": "2025-10-29T14:30:00",
+                        "message_count": 3,
+                    },
+                ],
+                "total": 2,
+            }
+        }
+    )
+

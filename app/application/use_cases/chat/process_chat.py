@@ -6,7 +6,6 @@ import logging
 import os
 import uuid
 from typing import AsyncIterator, Optional, Dict, Any
-from datetime import datetime  # FIX Bug 2.1: Import adequado no topo do arquivo
 
 from app.models.chat import ChatResponse
 from app.domain.ports import RAGPort, ConversationPort
@@ -16,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 class ChatUseCase:
-    """AplicaÃ§Ã£o: orquestra o fluxo de chat, desacoplado de HTTP.
+    """Aplica��o: orquestra o fluxo de chat, desacoplado de HTTP.
 
-    - Garante/recupera sessÃ£o e histÃ³rico
+    - Garante/recupera sess�o e hist�rico
     - Invoca RAG para resposta completa ou streaming
-    - Persiste histÃ³rico quando usuÃ¡rio autenticado
+    - Persiste hist�rico quando usu�rio autenticado
     """
 
     def __init__(self, rag: RAGPort, conversations: 'ConversationPort'):
@@ -33,7 +32,7 @@ class ChatUseCase:
         try:
             self._conversations.ensure_session(sid, user_id=user_id)
         except Exception as e:
-            logger.warning(f"Falha ao garantir sessÃ£o {sid}: {e}")
+            logger.warning(f"Falha ao garantir sess�o {sid}: {e}")
         return sid
 
     def _get_history_rows(self, session_id: str, authenticated: bool) -> list[dict]:
@@ -53,11 +52,10 @@ class ChatUseCase:
         user_id = str(current_user["id"]) if current_user else None
         session = self._ensure_session(session_id, user_id)
         try:
-            # registra pergunta do usuÃ¡rio se autenticado
             if current_user:
                 self._conversations.add_user_message(session, question)
         except Exception as e:
-            logger.debug(f"NÃ£o foi possÃ­vel registrar mensagem do usuÃ¡rio: {e}")
+            logger.debug(f"N�o foi poss�vel registrar mensagem do usu�rio: {e}")
 
         history_rows = self._get_history_rows(session, authenticated=bool(current_user))
 
@@ -66,11 +64,9 @@ class ChatUseCase:
             history_rows=history_rows if current_user else None,
         )
 
-        # anexa sessÃ£o e persisted
         resp.session_id = session if current_user else None
         resp.persisted = bool(current_user)
 
-        # persiste resposta do assistente
         if current_user:
             try:
                 sources_json = json.dumps([s.model_dump() for s in resp.sources], ensure_ascii=False)
@@ -83,7 +79,7 @@ class ChatUseCase:
                 )
                 resp.message_id = message_id
             except Exception as e:
-                logger.warning(f"Falha ao persistir resposta (nÃ£o bloqueante): {e}")
+                logger.warning(f"Falha ao persistir resposta (n�o bloqueante): {e}")
         else:
             resp.message_id = None
 
@@ -95,14 +91,10 @@ class ChatUseCase:
         session_id: Optional[str],
         current_user: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
-        """Gera eventos SSE: token, sources, metadata, done, error.
-
-        A montagem de tokens é feita aqui para persistência ao final.
-        """
+        """Gera eventos SSE: token, sources, metadata, done, error."""
         user_id = str(current_user["id"]) if current_user else None
         session = self._ensure_session(session_id, user_id)
 
-        # registra pergunta do usuário se autenticado
         if current_user:
             try:
                 self._conversations.add_user_message(session, question)
@@ -133,7 +125,6 @@ class ChatUseCase:
                 elif kind == "_error":
                     logger.error(f"Erro no streaming LLM: {data}")
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao gerar resposta.'}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"  # FIX: Enviar done em erro
                     return
                 elif kind == "_done":
                     break
@@ -156,9 +147,9 @@ class ChatUseCase:
                     try:
                         task.result()
                     except asyncio.CancelledError:
-                        logger.debug("Finalização do streaming cancelada (session_id=%s)", session)
+                        logger.debug("Finaliza��o do streaming cancelada (session_id=%s)", session)
                     except Exception as err:
-                        logger.warning("Falha na finalização assíncrona do streaming: %s", err)
+                        logger.warning("Falha na finaliza��o ass�ncrona do streaming: %s", err)
 
                 finalize_task.add_done_callback(_log_finalize)
 
@@ -168,17 +159,10 @@ class ChatUseCase:
                         timeout=self._finalize_timeout,
                     )
                 except asyncio.TimeoutError:
-                    # FIX Bug 2.3: message_id pode estar disponível mesmo com timeout
                     logger.debug(
-                        "Finalização do streaming continuará em background (session_id=%s)",
+                        "Finaliza��o do streaming continuar� em background (session_id=%s)",
                         session,
                     )
-                    # Tenta recuperar o resultado parcial se disponível
-                    if finalize_task.done() and not finalize_task.cancelled():
-                        try:
-                            message_id = finalize_task.result()
-                        except Exception:
-                            pass
                 except Exception as finalize_err:
                     logger.warning(
                         "Erro ao finalizar streaming (session_id=%s): %s", session, finalize_err
@@ -186,8 +170,8 @@ class ChatUseCase:
 
             meta = {
                 'type': 'metadata',
-                'model_used': getattr(self._rag, 'model', 'unknown'),  # FIX Bug 2.2: Acesso seguro
-                'timestamp': datetime.now().isoformat(),  # FIX Bug 2.1: Usar import normal
+                'model_used': self._rag.model,
+                'timestamp': __import__('datetime').datetime.now().isoformat(),
                 'confidence': confidence_score,
                 'message_id': message_id,
             }
@@ -209,7 +193,7 @@ class ChatUseCase:
         sources: list[dict],
         confidence_score: float,
     ) -> Optional[int]:
-        """Persiste histórico e memória sem bloquear o loop principal."""
+        """Persiste hist�rico e mem�ria sem bloquear o loop principal."""
         loop = asyncio.get_running_loop()
         message_id: Optional[int] = None
         should_persist = bool(current_user and session and assembled_answer)
@@ -226,7 +210,7 @@ class ChatUseCase:
                         confidence=confidence_score,
                     )
                 except Exception as err:
-                    logger.warning(f"Falha ao persistir histórico (stream): {err}")
+                    logger.warning(f"Falha ao persistir hist�rico (stream): {err}")
                     return None
 
             message_id = await loop.run_in_executor(None, _persist_message)
@@ -245,7 +229,7 @@ class ChatUseCase:
                     confidence=confidence_score,
                 )
             except Exception as mem_err:
-                logger.debug(f"Não foi possível armazenar memória após streaming: {mem_err}")
+                logger.debug(f"N�o foi poss�vel armazenar mem�ria ap�s streaming: {mem_err}")
 
         await loop.run_in_executor(None, _store_memory)
 

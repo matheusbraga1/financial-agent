@@ -10,6 +10,8 @@ from app.models.chat import (
     ChatHistoryResponse,
     ChatHistoryMessage,
     SourceDocument,
+    SessionInfo,
+    SessionsResponse,
 )
 from app.models.error import ErrorResponse
 from app.api.deps import get_conversation_repo, get_chat_usecase, get_vector_store
@@ -235,6 +237,182 @@ async def submit_feedback(
         f"Feedback recebido | session={session_id} | message={message_id} | rating={rating} | comment={comment}"
     )
     return {"status": "received", "message": "Obrigado pelo feedback!"}
+
+
+@router.get(
+    "/sessions",
+    response_model=SessionsResponse,
+    summary="Listar sessões do usuário",
+    description="Retorna todas as sessões de chat do usuário autenticado",
+    responses={
+        200: {"description": "Lista de sessões"},
+        401: {"description": "Não autenticado", "model": ErrorResponse},
+        500: {"description": "Erro interno do servidor", "model": ErrorResponse},
+    },
+    tags=["Chat"],
+)
+async def list_sessions(
+    limit: int = 100,
+    conv_service: ConversationPort = Depends(get_conversation_repo),
+    current_user = Depends(get_current_user),
+) -> SessionsResponse:
+    from datetime import datetime as _dt
+    import re
+
+    def sanitize_message_preview(text: str, max_length: int = 100) -> str:
+        """Remove markdown, HTML tags e limita tamanho da mensagem"""
+        if not text:
+            return "Nova conversa"
+
+        # Remove markdown headers (##, ###, etc)
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+
+        # Remove markdown bold/italic (**texto**, *texto*, __texto__)
+        text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
+        text = re.sub(r'\*([^\*]+)\*', r'\1', text)
+        text = re.sub(r'__([^_]+)__', r'\1', text)
+        text = re.sub(r'_([^_]+)_', r'\1', text)
+
+        # Remove links markdown [texto](url)
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+
+        # Remove code blocks (```código```, `código`)
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+
+        # Remove múltiplas quebras de linha
+        text = re.sub(r'\n+', ' ', text)
+
+        # Remove múltiplos espaços
+        text = re.sub(r'\s+', ' ', text)
+
+        # Trim
+        text = text.strip()
+
+        # Limita tamanho
+        if len(text) > max_length:
+            text = text[:max_length].rsplit(' ', 1)[0] + '...'
+
+        return text or "Nova conversa"
+
+    try:
+        user_id = str(current_user["id"])
+        logger.info(f"Listando sessões para user_id={user_id}")
+
+        sessions_data = conv_service.get_user_sessions(
+            user_id=user_id, limit=max(1, min(limit, 500))
+        )
+
+        sessions = []
+        for row in sessions_data:
+            try:
+                created_at = _dt.fromisoformat(row["created_at"]) if row.get("created_at") else _dt.now()
+            except Exception:
+                created_at = _dt.now()
+                
+            raw_message = row.get("last_message", "Nova conversa")
+            clean_message = sanitize_message_preview(raw_message)
+
+            sessions.append(
+                SessionInfo(
+                    session_id=row["session_id"],
+                    created_at=created_at,
+                    message_count=row.get("message_count", 0),
+                    last_message=clean_message,
+                )
+            )
+
+        logger.info(f"Retornando {len(sessions)} sessões para user_id={user_id}")
+        return SessionsResponse(sessions=sessions, total=len(sessions))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao listar sessões: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao listar sessões",
+        )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Deletar sessão de chat",
+    description="Deleta uma sessão de chat e todas as suas mensagens e feedbacks associados",
+    responses={
+        204: {"description": "Sessão deletada com sucesso"},
+        401: {"description": "Não autenticado", "model": ErrorResponse},
+        403: {"description": "Sem permissão para deletar esta sessão", "model": ErrorResponse},
+        404: {"description": "Sessão não encontrada", "model": ErrorResponse},
+        500: {"description": "Erro interno do servidor", "model": ErrorResponse},
+    },
+    tags=["Chat"],
+)
+async def delete_session(
+    session_id: str,
+    conv_service: ConversationPort = Depends(get_conversation_repo),
+    current_user = Depends(get_current_user),
+):
+    try:
+        logger.info(f"Tentativa de deletar sessão {session_id} por user_id={current_user['id']}")
+
+        # Verificar se a sessão existe
+        conv = conv_service.get_conversation(session_id)
+        if not conv:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Sessão não encontrada",
+            )
+
+        # Verificar ownership
+        owner_id = conv.get("user_id")
+        current_id = str(current_user["id"])
+        is_admin = bool(current_user.get("is_admin"))
+
+        if owner_id:
+            # Comparação segura de IDs
+            try:
+                owner_id_cmp = int(owner_id) if owner_id else None
+                current_id_cmp = int(current_user["id"]) if current_user.get("id") else None
+            except (ValueError, TypeError):
+                owner_id_cmp = str(owner_id)
+                current_id_cmp = str(current_user["id"])
+
+            if owner_id_cmp != current_id_cmp and not is_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Sem permissão para deletar esta sessão",
+                )
+        else:
+            if not is_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Sessão sem proprietário. Apenas administradores podem deletar",
+                )
+
+        # Deletar a sessão
+        deleted = conv_service.delete_conversation(session_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Sessão não encontrada",
+            )
+
+        logger.info(f"Sessão {session_id} deletada com sucesso por user_id={current_id}")
+        return None  # 204 No Content
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao deletar sessão: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao deletar sessão",
+        )
 
 
 @router.get(
