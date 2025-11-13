@@ -2,9 +2,7 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional
 from datetime import datetime
 
-
 class RegisterRequest(BaseModel):
-    """Modelo para registro de novo usuário"""
     email: EmailStr = Field(
         ...,
         description="Email válido do usuário",
@@ -31,9 +29,7 @@ class RegisterRequest(BaseModel):
         }
     })
 
-
 class LoginRequest(BaseModel):
-    """Modelo para autenticação de usuário"""
     email: EmailStr = Field(
         ...,
         description="Email cadastrado no sistema",
@@ -52,10 +48,38 @@ class LoginRequest(BaseModel):
             "password": "Senha@123"
         }
     })
-
+    
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str = Field(
+        ...,
+        description="Refresh token obtido no login",
+        min_length=20
+    )
+    
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    is_admin: bool = False
+    
+class TokenResponse(BaseModel):
+    access_token: str = Field(..., description="Token de acesso JWT")
+    refresh_token: Optional[str] = Field(
+        None,
+        description="Refresh token para renovar access token (válido por 7 dias)"
+    )
+    token_type: str = Field(default="bearer", description="Tipo do token")
+    expires_in: int = Field(
+        ...,
+        description="Tempo de expiração do access token em segundos"
+    )
+    expires_at: Optional[str] = Field(
+        None,
+        description="Timestamp ISO 8601 quando o access token expira"
+    )
+    user: UserResponse = Field(..., description="Dados do usuário")
 
 class UserPublic(BaseModel):
-    """Dados públicos do usuário (sem informações sensíveis)"""
     id: int = Field(..., description="ID único do usuário", examples=[1])
     email: EmailStr = Field(..., description="Email do usuário", examples=["joao.silva@empresa.com.br"])
     name: Optional[str] = Field(None, description="Nome completo do usuário", examples=["João Silva"])
@@ -74,9 +98,7 @@ class UserPublic(BaseModel):
         }
     })
 
-
 class TokenResponse(BaseModel):
-    """Token JWT para autenticação"""
     access_token: str = Field(
         ...,
         description="Token JWT Bearer para ser usado no header Authorization",
