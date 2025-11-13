@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Dict, Any
 import logging
 import json
@@ -230,17 +230,18 @@ async def submit_feedback(
     response_model=SessionsResponse,
     summary="Listar sessões do usuário",
     responses={
-        200: {"description": "Lista de sessões"},
+        200: {"description": "Lista de sessões com headers de paginação"},
         401: {"description": "Não autenticado", "model": ErrorResponse},
         500: {"description": "Erro interno do servidor", "model": ErrorResponse},
     },
     tags=["Chat"],
 )
 async def list_sessions(
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=500, description="Número de sessões por página"),
+    offset: int = Query(0, ge=0, description="Offset para paginação"),
     conv_service: ConversationPort = Depends(get_conversation_repo),
     current_user = Depends(get_current_user),
-) -> SessionsResponse:
+) -> JSONResponse:
     from datetime import datetime as _dt
     import re
 
@@ -249,23 +250,16 @@ async def list_sessions(
             return "Nova conversa"
 
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-
         text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
         text = re.sub(r'\*([^\*]+)\*', r'\1', text)
         text = re.sub(r'__([^_]+)__', r'\1', text)
         text = re.sub(r'_([^_]+)_', r'\1', text)
-
         text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-
         text = re.sub(r'```[\s\S]*?```', '', text)
         text = re.sub(r'`([^`]+)`', r'\1', text)
-
         text = re.sub(r'<[^>]+>', '', text)
-
         text = re.sub(r'\n+', ' ', text)
-
         text = re.sub(r'\s+', ' ', text)
-
         text = text.strip()
 
         if len(text) > max_length:
@@ -275,17 +269,24 @@ async def list_sessions(
 
     try:
         user_id = str(current_user["id"])
-        logger.info(f"Listando sessões para user_id={user_id}")
+        logger.info(f"Listando sessões para user_id={user_id} (limit={limit}, offset={offset})")
 
         sessions_data = conv_service.get_user_sessions(
-            user_id=user_id, limit=max(1, min(limit, 500))
+            user_id=user_id, limit=max(1, min(limit + offset, 500))
         )
+        
+        total = len(sessions_data)
+        page = (offset // limit) + 1
+        total_pages = (total + limit - 1) // limit if total > 0 else 1
+        
+        paginated_sessions = sessions_data[offset:offset + limit]
 
         sessions = []
-        for row in sessions_data:
+        for row in paginated_sessions:
             try:
                 created_at = _dt.fromisoformat(row["created_at"]) if row.get("created_at") else _dt.now()
-            except Exception:
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Erro ao parsear timestamp para session {row.get('session_id')}: {e}")
                 created_at = _dt.now()
                 
             raw_message = row.get("last_message", "Nova conversa")
@@ -300,8 +301,19 @@ async def list_sessions(
                 )
             )
 
-        logger.info(f"Retornando {len(sessions)} sessões para user_id={user_id}")
-        return SessionsResponse(sessions=sessions, total=len(sessions))
+        logger.info(f"Retornando {len(sessions)} sessões (página {page}/{total_pages})")
+        
+        response_data = SessionsResponse(sessions=sessions, total=total)
+        
+        return JSONResponse(
+            content=response_data.model_dump(),
+            headers={
+                "X-Total-Count": str(total),
+                "X-Page": str(page),
+                "X-Page-Size": str(limit),
+                "X-Total-Pages": str(total_pages),
+            }
+        )
 
     except HTTPException:
         raise
@@ -340,24 +352,27 @@ async def delete_session(
                 detail="Sessão não encontrada",
             )
 
-        owner_id = conv.get("user_id")
+        owner_id_str = conv.get("user_id")
         current_id = str(current_user["id"])
         is_admin = bool(current_user.get("is_admin"))
 
-        if owner_id:
+        if owner_id_str:
             try:
-                owner_id_cmp = int(owner_id) if owner_id else None
-                current_id_cmp = int(current_user["id"]) if current_user.get("id") else None
+                owner_id = int(owner_id_str)
             except (ValueError, TypeError):
-                owner_id_cmp = str(owner_id)
-                current_id_cmp = str(current_user["id"])
+                logger.error(f"user_id inválido na sessão {session_id}: {owner_id_str}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Dados inconsistentes na sessão",
+                )
 
-            if owner_id_cmp != current_id_cmp and not is_admin:
+            if owner_id != current_id and not is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Sem permissão para deletar esta sessão",
                 )
         else:
+            # Sessão órfã (sem proprietário)
             if not is_admin:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -372,7 +387,7 @@ async def delete_session(
             )
 
         logger.info(f"Sessão {session_id} deletada com sucesso por user_id={current_id}")
-        return None  # 204 No Content
+        return None
 
     except HTTPException:
         raise
@@ -403,23 +418,36 @@ async def get_history(
     import json as _json
     from datetime import datetime as _dt
 
-    if not session_id or len(session_id.strip()) < 3:
+    if not session_id or len(session_id.strip()) < 10:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="session_id inválido"
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="session_id inválido"
+        )
+    
+    import uuid
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session_id deve ser um UUID válido"
         )
 
     try:
         conv = conv_service.get_conversation(session_id)
-        owner = conv.get("user_id") if conv else None
+        owner_id_str = conv.get("user_id") if conv else None
+        current_id = int(current_user["id"])
         is_admin = bool(current_user.get("is_admin"))
 
-        if owner:
+        if owner_id_str:
             try:
-                owner_id = int(owner) if owner else None
-                current_id = int(current_user["id"]) if current_user.get("id") else None
+                owner_id = int(owner_id_str)
             except (ValueError, TypeError):
-                owner_id = str(owner)
-                current_id = str(current_user["id"])
+                logger.error(f"user_id inválido na sessão {session_id}: {owner_id_str}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Dados inconsistentes na sessão",
+                )
 
             if owner_id != current_id and not is_admin:
                 raise HTTPException(
@@ -441,7 +469,8 @@ async def get_history(
             ts = None
             try:
                 ts = _dt.fromisoformat(r.get("timestamp")) if r.get("timestamp") else None
-            except Exception:
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Erro ao parsear timestamp para mensagem {r.get('id')}: {e}")
                 ts = None
 
             role = r.get("role")
