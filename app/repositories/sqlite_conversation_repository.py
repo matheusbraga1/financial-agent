@@ -2,11 +2,13 @@ import os
 import sqlite3
 import threading
 import time
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from app.domain.ports import ConversationPort
 
+logger = logging.getLogger(__name__)
 
 class SQLiteConversationRepository(ConversationPort):
     def __init__(self, db_path: Optional[str] = None):
@@ -21,60 +23,69 @@ class SQLiteConversationRepository(ConversationPort):
         self._init_db()
 
     def _connect(self):
-        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=5.0)
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=10.0)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.execute("PRAGMA busy_timeout=5000;")
+            conn.execute("PRAGMA busy_timeout=10000;")
             conn.execute("PRAGMA foreign_keys=ON;")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Erro ao configurar PRAGMAs do SQLite: {e}")
         return conn
 
     def _init_db(self):
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
+            
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
                     session_id TEXT PRIMARY KEY,
                     user_id TEXT,
-                    created_at TEXT
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
                 """
             )
+            
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT,
-                    role TEXT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                     content TEXT,
                     answer TEXT,
                     sources_json TEXT,
                     model_used TEXT,
-                    confidence REAL,
-                    timestamp TEXT
+                    confidence REAL CHECK(confidence >= 0 AND confidence <= 1),
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY(session_id) REFERENCES conversations(session_id) ON DELETE CASCADE
                 )
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, timestamp);")
+            
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS feedback (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT,
-                    message_id INTEGER,
-                    rating TEXT,
+                    session_id TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    rating TEXT NOT NULL,
                     comment TEXT,
-                    created_at TEXT
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY(session_id) REFERENCES conversations(session_id) ON DELETE CASCADE,
+                    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
                 )
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_message ON feedback(message_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_feedback_session ON feedback(session_id);")
+            
             conn.commit()
+            logger.info(f"Database initialized at {self.db_path}")
 
     def _purge_if_needed(self, conn: sqlite3.Connection):
         if self.retention_days <= 0:
@@ -86,9 +97,12 @@ class SQLiteConversationRepository(ConversationPort):
         try:
             cur = conn.cursor()
             cur.execute("DELETE FROM messages WHERE timestamp < ?", (cutoff,))
+            deleted_count = cur.rowcount
             conn.commit()
-        except Exception:
-            pass
+            if deleted_count > 0:
+                logger.info(f"Purged {deleted_count} messages older than {self.retention_days} days")
+        except Exception as e:
+            logger.error(f"Error during purge: {e}")
         finally:
             self._last_purge = now
 
@@ -185,6 +199,48 @@ class SQLiteConversationRepository(ConversationPort):
             conn.commit()
             return cur.lastrowid
 
+    def get_user_sessions(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    c.session_id,
+                    c.user_id,
+                    c.created_at,
+                    COUNT(m.id) as message_count,
+                    (
+                        SELECT COALESCE(content, answer, 'Nova conversa')
+                        FROM messages
+                        WHERE session_id = c.session_id
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    ) as last_message
+                FROM conversations c
+                LEFT JOIN messages m ON c.session_id = m.session_id
+                WHERE c.user_id = ? AND c.user_id IS NOT NULL AND c.user_id != ''
+                GROUP BY c.session_id, c.user_id, c.created_at
+                ORDER BY c.created_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_conversation(self, session_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            
+            cur.execute("DELETE FROM conversations WHERE session_id=?", (session_id,))
+            deleted = cur.rowcount > 0
+            
+            conn.commit()
+            
+            if deleted:
+                logger.info(f"Deleted conversation {session_id} and all related data")
+            
+            return deleted
+
 
 conversation_repository = SQLiteConversationRepository()
-
