@@ -1,9 +1,8 @@
 ﻿from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
-
 class Settings(BaseSettings):
-    app_name: str = "Chat IA GLPI"
+    app_name: str = "Financial Agent"
     app_version: str = "1.0.0"
     debug: bool = False
 
@@ -22,10 +21,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-8b-instant"
     groq_timeout: int = 30
-    groq_max_tokens: int = 2048  # Reduced from 4096 to avoid rate limits (6000 TPM free tier)
+    groq_max_tokens: int = 2048
 
     ollama_host: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "qwen2.5:3b"
     ollama_timeout: int = 120
 
     embedding_model: str = "intfloat/multilingual-e5-large"
@@ -59,6 +58,8 @@ class Settings(BaseSettings):
     password_hash_iterations_dev: int = 50_000
 
     chat_history_max_messages: int = 8
+    
+    stream_finalize_timeout: float = 1.0
 
     cors_origins: str = "*"
 
