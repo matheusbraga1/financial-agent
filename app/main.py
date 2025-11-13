@@ -1,213 +1,157 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from fastapi.security import HTTPBearer
-from contextlib import asynccontextmanager
 import logging
-import uuid
+import time
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from app.api.v1 import auth, chat, documents
 from app.core.config import get_settings
-from app.core.logging import setup_logging
-from app.api.v1.router import api_router
-from app.exceptions.handlers import (
-    validation_exception_handler,
-    general_exception_handler,
-    http_exception_handler,
-)
+from app.models.error import ErrorResponse
 
-# Configuração de segurança para Swagger
-security_scheme = HTTPBearer()
-
-
-setup_logging()
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info(f"Iniciando {settings.app_name} v{settings.app_version}")
-    logger.info(f"Modo Debug: {settings.debug}")
-    logger.info(f"Modelo LLM: {settings.ollama_model}")
-    logger.info(f"Collection: {settings.qdrant_collection}")
-
-    # Validação de segurança para JWT Secret
-    if settings.jwt_secret == "change-me-in-.env":
-        logger.warning("⚠️  ATENÇÃO: JWT_SECRET está usando valor padrão!")
-        if not settings.debug:
-            logger.error("❌ Configure JWT_SECRET no arquivo .env para produção!")
-            raise ValueError("JWT_SECRET não configurado para ambiente de produção")
-
+    logger.info(f"🚀 Starting {settings.app_name} v{settings.app_version}")
+    logger.info(f"Debug mode: {settings.debug}")
+    logger.info(f"LLM Provider: {settings.llm_provider}")
     yield
+    logger.info(f"👋 Shutting down {settings.app_name}")
 
-    # Shutdown
-    logger.info("Encerrando aplicação...")
-
-
-tags_metadata = [
-    {
-        "name": "Autenticação",
-        "description": """
-        Gerenciamento de usuários e autenticação JWT.
-
-        **Fluxo de Autenticação:**
-        1. Registrar novo usuário com `/auth/register`
-        2. Fazer login com `/auth/login` para obter token JWT
-        3. Usar o token nas requisições protegidas: `Authorization: Bearer TOKEN`
-        4. Verificar dados do usuário com `/auth/me`
-        5. Fazer logout com `/auth/logout` para revogar o token
-        """
-    },
-    {
-        "name": "Chat",
-        "description": """
-        Endpoints de conversação com IA usando RAG (Retrieval Augmented Generation).
-
-        **Funcionalidades:**
-        - Chat com respostas contextualizadas baseadas na base de conhecimento GLPI
-        - Streaming de respostas em tempo real (SSE)
-        - Histórico de conversas persistente
-        - Busca híbrida (vetorial + texto) com MMR
-        """
-    },
-    {
-        "name": "Documentos",
-        "description": """
-        Gestão da base de conhecimento e documentos indexados.
-
-        **Recursos:**
-        - Adicionar novos documentos (requer admin)
-        - Consultar estatísticas da coleção
-        - Sincronização automática com GLPI
-        """
-    },
-    {
-        "name": "Health",
-        "description": """
-        Endpoints para monitoramento e verificação de saúde dos serviços.
-
-        **Verificações:**
-        - Status geral da aplicação
-        - Conectividade com Qdrant (Vector DB)
-        - Conectividade com Ollama (LLM)
-        """
-    },
-]
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 
 app = FastAPI(
-    lifespan=lifespan,
     title=settings.app_name,
     version=settings.app_version,
-    description="API REST para sistema de chat inteligente com busca contextualizada em documentos GLPI usando RAG (Retrieval Augmented Generation).",
+    description="API de Chat com IA para suporte técnico",
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_url="/openapi.json",
-    openapi_tags=tags_metadata,
-    contact={
-        "name": "Suporte TI",
-        "email": "ti@empresa.com.br",
-    },
-    license_info={
-        "name": "Interno - Empresa",
-    },
-    swagger_ui_parameters={
-        "persistAuthorization": True,
-        "displayRequestDuration": True,
-        "filter": True,
-        "tryItOutEnabled": True,
-    },
+    lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+
+app.add_middleware(SlowAPIMiddleware)
+
+origins = settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count", "X-Page", "X-Page-Size", "X-Total-Pages", "X-Request-ID", "API-Version"],
 )
 
-app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
-app.add_exception_handler(Exception, general_exception_handler)
-
-app.include_router(api_router, prefix="/api/v1")
-
-
-# Configurar o botão Authorize no Swagger
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-
-    from fastapi.openapi.utils import get_openapi
-
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-        tags=app.openapi_tags,
-    )
-
-    # Adicionar configuração de segurança JWT Bearer
-    openapi_schema["components"]["securitySchemes"] = {
-        "Bearer": {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT",
-            "description": "Insira o token JWT obtido do endpoint /auth/login (sem o prefixo 'Bearer')"
-        }
-    }
-
-    # Marcar endpoints protegidos (que usam get_current_user obrigatório)
-    protected_endpoints = [
-        "/api/v1/auth/me",
-        "/api/v1/auth/logout",
-        "/api/v1/chat/history",  # Histórico requer autenticação para verificar propriedade
-        "/api/v1/documents",  # Criar documentos requer admin
-    ]
-
-    # Nota: /api/v1/chat e /api/v1/chat/stream usam autenticação OPCIONAL (get_optional_user)
-    # O histórico NÃO será persistido se o usuário não estiver autenticado
-
-    # Adicionar segurança aos endpoints protegidos
-    for path, path_item in openapi_schema["paths"].items():
-        for method in path_item:
-            if method in ["get", "post", "put", "delete", "patch"]:
-                # Verificar se o endpoint está na lista de protegidos
-                if any(path.startswith(protected) for protected in protected_endpoints):
-                    path_item[method]["security"] = [{"Bearer": []}]
-
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-
-app.openapi = custom_openapi
-
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["API-Version"] = settings.app_version
+    return response
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    import uuid
+    request_id = str(uuid.uuid4())
     request.state.request_id = request_id
+    
+    start_time = time.time()
     response = await call_next(request)
+    process_time = time.time() - start_time
+    
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Process-Time"] = f"{process_time:.3f}s"
+    
+    logger.info(
+        f"{request.method} {request.url.path} - {response.status_code} - {process_time:.3f}s - ID: {request_id}"
+    )
+    
     return response
 
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded):
+    trace_id = getattr(request.state, "request_id", None)
+    
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content=ErrorResponse(
+            code="rate_limited",
+            message=f"Rate limit exceeded: {exc.detail}",
+            trace_id=trace_id,
+            retryable=True,
+            retry_after=60,
+        ).model_dump(),
+        headers={
+            "Retry-After": "60",
+            "X-RateLimit-Limit": str(limiter.default_limits),
+        }
+    )
 
-@app.get("/", tags=["Root"])
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    trace_id = getattr(request.state, "request_id", None)
+    errors = exc.errors()
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=ErrorResponse(
+            code="validation_error",
+            message="Validation error in request data",
+            details=errors,
+            trace_id=trace_id,
+            retryable=False,
+        ).model_dump(),
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    trace_id = getattr(request.state, "request_id", None)
+    logger.error(f"Unhandled exception (trace_id={trace_id}): {exc}", exc_info=True)
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=ErrorResponse(
+            code="internal_error",
+            message="An unexpected error occurred. Please try again later.",
+            trace_id=trace_id,
+            retryable=True,
+        ).model_dump(),
+    )
+
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
+app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
+
+@app.get("/", include_in_schema=False)
 async def root():
     return {
-        "message": f"Bem-vindo ao {settings.app_name}",
+        "app": settings.app_name,
         "version": settings.app_version,
         "docs": "/docs",
+        "health": "/health",
     }
 
-
 @app.get("/health", tags=["Health"])
-async def health():
+async def health_check():
     return {
         "status": "healthy",
         "app": settings.app_name,
         "version": settings.app_version,
     }
-
