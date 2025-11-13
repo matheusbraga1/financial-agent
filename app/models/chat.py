@@ -1,7 +1,6 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional
 from datetime import datetime
-
 
 class ChatRequest(BaseModel):
     question: str = Field(
@@ -9,10 +8,22 @@ class ChatRequest(BaseModel):
         json_schema_extra={"example": "Como resetar minha senha do email?"}
     )
     session_id: Optional[str] = Field(
-        None, description="ID da sessão para manter contexto",
+        None, description="ID da sessão para manter contexto (UUID v4)",
         json_schema_extra={"example": "550e8400-e29b-41d4-a716-446655440000"}
     )
-
+    
+    @field_validator('session_id')
+    @classmethod
+    def validate_session_id(cls, v):
+        if v is None:
+            return v
+        
+        import uuid
+        try:
+            uuid.UUID(v)
+            return v
+        except ValueError:
+            raise ValueError('session_id deve ser um UUID válido (formato: 550e8400-e29b-41d4-a716-446655440000)')
 
 class SourceDocument(BaseModel):
     id: str
@@ -23,7 +34,6 @@ class SourceDocument(BaseModel):
         default=None,
         description="Pequeno trecho do conteúdo do documento para contexto",
     )
-
 
 class ChatResponse(BaseModel):
     answer: str = Field(..., description="Resposta da IA em markdown")
@@ -77,12 +87,12 @@ class ChatResponse(BaseModel):
                 "model_used": "llama3.1:8b",
                 "confidence": 0.82,
                 "message_id": 42,
-                "persisted": False,
+                "persisted": True,
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
                 "timestamp": "2025-10-30T10:30:00",
             }
         }
     )
-
 
 class ChatHistoryMessage(BaseModel):
     message_id: Optional[int] = Field(None, description="Identificador único da mensagem")
@@ -107,7 +117,6 @@ class ChatHistoryMessage(BaseModel):
     model_config = ConfigDict(
         protected_namespaces=(),
     )
-
 
 class ChatHistoryResponse(BaseModel):
     session_id: str
@@ -146,7 +155,6 @@ class ChatHistoryResponse(BaseModel):
         }
     )
 
-
 class SessionInfo(BaseModel):
     session_id: str = Field(..., description="Identificador único da sessão")
     created_at: datetime = Field(..., description="Data de criação da sessão")
@@ -164,7 +172,6 @@ class SessionInfo(BaseModel):
             }
         }
     )
-
 
 class SessionsResponse(BaseModel):
     sessions: List[SessionInfo] = Field(default_factory=list, description="Lista de sessões do usuário")
@@ -190,4 +197,3 @@ class SessionsResponse(BaseModel):
             }
         }
     )
-
