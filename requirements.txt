@@ -1,6 +1,5 @@
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-# Compatível com langchain>=0.3.7
 pydantic==2.9.2
 pydantic-settings==2.4.0
 email-validator==2.1.0.post1
@@ -31,8 +30,9 @@ PyJWT==2.8.0
 pytest>=7.4
 pytest-asyncio>=0.21
 
-# Processamento de documentos multi-formato
-PyMuPDF==1.23.8  # PDFs
-python-docx==1.1.0  # Word Documents
-openpyxl==3.1.2  # Excel (opcional)
-langchain-text-splitters==0.3.0  # Chunking avançado
+PyMuPDF==1.23.8 
+python-docx==1.1.0
+openpyxl==3.1.2
+langchain-text-splitters==0.3.0
+
+slowapi==0.1.9
