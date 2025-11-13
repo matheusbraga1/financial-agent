@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-8b-instant"
     groq_timeout: int = 30
+    groq_max_tokens: int = 2048  # Reduced from 4096 to avoid rate limits (6000 TPM free tier)
 
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"

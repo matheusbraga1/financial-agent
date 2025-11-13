@@ -56,6 +56,7 @@ def get_llm() -> LLMPort:
             temperature=settings.llm_temperature,
             top_p=settings.llm_top_p,
             timeout=settings.groq_timeout,
+            max_tokens=settings.groq_max_tokens,
         )
     elif provider == "ollama":
         # Ollama only
@@ -78,6 +79,7 @@ def get_llm() -> LLMPort:
                 temperature=settings.llm_temperature,
                 top_p=settings.llm_top_p,
                 timeout=settings.groq_timeout,
+                max_tokens=settings.groq_max_tokens,
             )
 
         ollama = OllamaAdapter(
