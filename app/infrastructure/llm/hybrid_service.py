@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Dict, Any, Iterable
+from typing import Optional, Dict, Any, Iterable, List
 from app.infrastructure.llm.groq_adapter import GroqAdapter
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
 
@@ -19,21 +19,56 @@ class HybridLLMService:
         self.ollama = ollama_adapter
         self.prefer_groq = prefer_groq
 
-        if prefer_groq and groq_adapter:
-            self.primary = groq_adapter
-            self.primary_name = "Groq"
-            self.fallback = ollama_adapter
-            self.fallback_name = "Ollama"
-        else:
-            self.primary = ollama_adapter
-            self.primary_name = "Ollama"
-            self.fallback = groq_adapter
-            self.fallback_name = "Groq"
-
+        self._build_provider_chain()
+        
         logger.info(
-            f"HybridLLMService initialized: Primary={self.primary_name}, "
-            f"Fallback={self.fallback_name if self.fallback else 'None'}"
+            f"HybridLLMService initialized: "
+            f"Chain={' -> '.join(p['name'] for p in self.provider_chain)}"
         )
+
+    def _build_provider_chain(self) -> None:
+        self.provider_chain: List[Dict[str, Any]] = []
+        
+        if self.prefer_groq:
+            if self.groq:
+                self.provider_chain.append({
+                    "name": "Groq",
+                    "adapter": self.groq,
+                    "check": self._check_groq_available
+                })
+            if self.ollama:
+                self.provider_chain.append({
+                    "name": "Ollama", 
+                    "adapter": self.ollama,
+                    "check": self._check_ollama_available
+                })
+        else:
+            if self.ollama:
+                self.provider_chain.append({
+                    "name": "Ollama",
+                    "adapter": self.ollama, 
+                    "check": self._check_ollama_available
+                })
+            if self.groq:
+                self.provider_chain.append({
+                    "name": "Groq",
+                    "adapter": self.groq,
+                    "check": self._check_groq_available
+                })
+
+    def _check_groq_available(self) -> bool:
+        return self.groq is not None
+
+    def _check_ollama_available(self) -> bool:
+        if not self.ollama:
+            return False
+            
+        try:
+            self.ollama.client.list()
+            return True
+        except Exception as e:
+            logger.debug(f"Ollama availability check failed: {e}")
+            return False
 
     def generate(
         self,
@@ -41,26 +76,32 @@ class HybridLLMService:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> str:
-        if self.primary:
+        errors = []
+        
+        for provider in self.provider_chain:
+            name = provider["name"]
+            adapter = provider["adapter"]
+            check = provider["check"]
+            
+            if not check():
+                logger.debug(f"⏭️  Skipping {name} (not available)")
+                continue
+            
             try:
-                logger.info(f"Trying {self.primary_name}...")
-                result = self.primary.generate(prompt, system_prompt, options)
-                logger.info(f"✅ {self.primary_name} succeeded ({len(result)} chars)")
+                logger.info(f"🔄 Trying {name}...")
+                result = adapter.generate(prompt, system_prompt, options)
+                logger.info(f"✅ {name} succeeded ({len(result)} chars)")
                 return result
+                
             except Exception as e:
-                logger.warning(f"⚠️ {self.primary_name} failed: {e}")
-
-        if self.fallback:
-            try:
-                logger.info(f"Falling back to {self.fallback_name}...")
-                result = self.fallback.generate(prompt, system_prompt, options)
-                logger.info(f"✅ {self.fallback_name} succeeded ({len(result)} chars)")
-                return result
-            except Exception as e:
-                logger.error(f"❌ {self.fallback_name} also failed: {e}")
-                raise Exception(f"All LLM providers failed. Last error: {str(e)}")
-
-        raise Exception("No LLM providers available")
+                error_msg = str(e)
+                errors.append(f"{name}: {error_msg}")
+                logger.warning(f"⚠️  {name} failed: {error_msg}")
+                continue
+        
+        error_summary = " | ".join(errors)
+        logger.error(f"❌ All providers failed: {error_summary}")
+        raise Exception(f"All LLM providers failed. Errors: {error_summary}")
 
     def stream(
         self,
@@ -68,28 +109,59 @@ class HybridLLMService:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Iterable[str]:
-        if self.primary:
+        errors = []
+        
+        for provider in self.provider_chain:
+            name = provider["name"]
+            adapter = provider["adapter"]
+            check = provider["check"]
+            
+            if not check():
+                logger.debug(f"⏭️  Skipping {name} (not available)")
+                continue
+            
             try:
-                logger.info(f"Streaming from {self.primary_name}...")
-                for chunk in self.primary.stream(prompt, system_prompt, options):
+                logger.info(f"🔄 Streaming from {name}...")
+                
+                stream_generator = adapter.stream(prompt, system_prompt, options)
+                first_chunk = next(stream_generator, None)
+                
+                if first_chunk is None:
+                    logger.warning(f"⚠️  {name} returned empty stream")
+                    continue
+                
+                yield first_chunk
+                
+                chunk_count = 1
+                for chunk in stream_generator:
+                    chunk_count += 1
                     yield chunk
-                logger.info(f"✅ {self.primary_name} streaming succeeded")
-                return  # Success, exit
+                
+                logger.info(f"✅ {name} streaming succeeded ({chunk_count} chunks)")
+                return
+                
+            except StopIteration:
+                logger.warning(f"⚠️  {name} returned empty stream")
+                continue
+                
             except Exception as e:
-                logger.warning(f"⚠️ {self.primary_name} streaming failed: {e}")
-
-        if self.fallback:
-            try:
-                logger.info(f"Falling back to {self.fallback_name} streaming...")
-                for chunk in self.fallback.stream(prompt, system_prompt, options):
-                    yield chunk
-                logger.info(f"✅ {self.fallback_name} streaming succeeded")
-                return  # Success, exit
-            except Exception as e:
-                logger.error(f"❌ {self.fallback_name} streaming also failed: {e}")
-                raise Exception(f"All LLM providers failed. Last error: {str(e)}")
-
-        raise Exception("No LLM providers available")
+                error_msg = str(e)
+                errors.append(f"{name}: {error_msg}")
+                logger.warning(f"⚠️  {name} streaming failed: {error_msg}")
+                continue
+        
+        error_summary = " | ".join(errors)
+        logger.error(f"❌ All streaming providers failed: {error_summary}")
+        raise Exception(f"All LLM providers failed. Errors: {error_summary}")
 
     def get_active_provider(self) -> str:
-        return self.primary_name
+        if self.provider_chain:
+            return self.provider_chain[0]["name"]
+        return "None"
+
+    def get_available_providers(self) -> List[str]:
+        return [
+            p["name"] 
+            for p in self.provider_chain 
+            if p["check"]()
+        ]

@@ -1,56 +1,47 @@
-"""
-Ollama LLM Adapter - Local LLM provider.
-
-Implements LLMPort using Ollama for local inference.
-Follows Single Responsibility Principle (SOLID).
-"""
-
 import logging
 from typing import Optional, Dict, Any, Iterable
 import ollama
+from ollama import ResponseError
 
 logger = logging.getLogger(__name__)
 
-
 class OllamaAdapter:
-    """
-    Adapter for Ollama (local LLM).
-
-    Advantages:
-    - Free and private (runs locally)
-    - No API rate limits
-    - Works offline
-
-    Disadvantages:
-    - Slower than cloud APIs (especially on CPU)
-    - Requires local resources (RAM, GPU)
-    """
-
     def __init__(
         self,
         host: str = "http://localhost:11434",
-        model: str = "llama3.1:8b",
+        model: str = "qwen2.5:3b",
         temperature: float = 0.2,
         top_p: float = 0.9,
         timeout: int = 120,
     ):
-        """
-        Initialize Ollama adapter.
-
-        Args:
-            host: Ollama server URL
-            model: Model name (e.g., "llama3.1:8b")
-            temperature: Sampling temperature (0.0-1.0)
-            top_p: Nucleus sampling parameter
-            timeout: Request timeout in seconds
-        """
-        self.client = ollama.Client(host=host)
+        self.host = host
+        self.client = ollama.Client(host=host, timeout=timeout)
         self.model = model
         self.temperature = temperature
         self.top_p = top_p
         self.timeout = timeout
 
-        logger.info(f"OllamaAdapter initialized with model={model} at {host}")
+        logger.info(
+            f"OllamaAdapter initialized with model={model} at {host} "
+            f"(timeout={timeout}s)"
+        )
+
+    def _validate_model_available(self) -> None:
+        try:
+            models = self.client.list()
+            model_names = [m['name'] for m in models.get('models', [])]
+            
+            if self.model not in model_names:
+                logger.warning(
+                    f"Model {self.model} not found in Ollama. "
+                    f"Available models: {', '.join(model_names)}"
+                )
+                raise Exception(
+                    f"Model '{self.model}' not found. "
+                    f"Pull it with: ollama pull {self.model}"
+                )
+        except Exception as e:
+            raise Exception(f"Ollama validation failed: {str(e)}")
 
     def generate(
         self,
@@ -58,28 +49,12 @@ class OllamaAdapter:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Generate completion using Ollama.
-
-        Args:
-            prompt: User prompt
-            system_prompt: System instructions
-            options: Additional generation options
-
-        Returns:
-            Generated text
-
-        Raises:
-            Exception: If Ollama call fails
-        """
         try:
-            # Prepare messages
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            # Merge options
             generation_options = {
                 "temperature": self.temperature,
                 "top_p": self.top_p,
@@ -88,8 +63,11 @@ class OllamaAdapter:
             if options:
                 generation_options.update(options)
 
-            # Call Ollama
-            logger.debug(f"Calling Ollama with model={self.model}")
+            logger.debug(
+                f"Calling Ollama with model={self.model}, "
+                f"temp={generation_options['temperature']}"
+            )
+            
             response = self.client.chat(
                 model=self.model,
                 messages=messages,
@@ -97,14 +75,31 @@ class OllamaAdapter:
                 stream=False,
             )
 
-            # Extract text
             text = response["message"]["content"]
-            logger.debug(f"Ollama returned {len(text)} chars")
+            
+            if "eval_count" in response:
+                logger.info(
+                    f"Ollama success: {len(text)} chars, "
+                    f"tokens: {response.get('eval_count', 'N/A')}"
+                )
+            else:
+                logger.debug(f"Ollama returned {len(text)} chars")
 
             return text
 
+        except ResponseError as e:
+            logger.error(f"Ollama API error: {e}")
+            raise Exception(f"Ollama generation failed: {str(e)}")
+            
+        except ConnectionError as e:
+            logger.error(f"Cannot connect to Ollama at {self.host}: {e}")
+            raise Exception(
+                f"Ollama not reachable at {self.host}. "
+                f"Is Ollama running? Start with: ollama serve"
+            )
+            
         except Exception as e:
-            logger.error(f"Ollama error: {e}")
+            logger.error(f"Ollama unexpected error: {e}")
             raise Exception(f"Ollama generation failed: {str(e)}")
 
     def stream(
@@ -113,28 +108,12 @@ class OllamaAdapter:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Iterable[str]:
-        """
-        Stream completion tokens using Ollama.
-
-        Args:
-            prompt: User prompt
-            system_prompt: System instructions
-            options: Additional generation options
-
-        Yields:
-            Text chunks as they are generated
-
-        Raises:
-            Exception: If Ollama call fails
-        """
         try:
-            # Prepare messages
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            # Merge options
             generation_options = {
                 "temperature": self.temperature,
                 "top_p": self.top_p,
@@ -143,8 +122,8 @@ class OllamaAdapter:
             if options:
                 generation_options.update(options)
 
-            # Call Ollama with streaming
             logger.debug(f"Streaming from Ollama with model={self.model}")
+            
             stream = self.client.chat(
                 model=self.model,
                 messages=messages,
@@ -152,11 +131,28 @@ class OllamaAdapter:
                 stream=True,
             )
 
-            # Yield tokens
+            chunk_count = 0
+
             for chunk in stream:
                 if "message" in chunk and "content" in chunk["message"]:
-                    yield chunk["message"]["content"]
+                    content = chunk["message"]["content"]
+                    if content:
+                        chunk_count += 1
+                        yield content
 
+            logger.info(f"Ollama streaming completed ({chunk_count} chunks)")
+
+        except ResponseError as e:
+            logger.error(f"Ollama streaming API error: {e}")
+            raise Exception(f"Ollama streaming failed: {str(e)}")
+            
+        except ConnectionError as e:
+            logger.error(f"Cannot connect to Ollama at {self.host}: {e}")
+            raise Exception(
+                f"Ollama not reachable at {self.host}. "
+                f"Is Ollama running? Start with: ollama serve"
+            )
+            
         except Exception as e:
-            logger.error(f"Ollama streaming error: {e}")
+            logger.error(f"Ollama streaming unexpected error: {e}")
             raise Exception(f"Ollama streaming failed: {str(e)}")
