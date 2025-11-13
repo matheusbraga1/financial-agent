@@ -1,10 +1,3 @@
-"""
-Groq LLM Adapter - Fast cloud-based LLM provider.
-
-Implements LLMPort using Groq API for ultra-fast inference.
-Follows Single Responsibility Principle (SOLID).
-"""
-
 import logging
 import time
 from typing import Optional, Dict, Any, Iterable
@@ -13,17 +6,7 @@ from groq import RateLimitError
 
 logger = logging.getLogger(__name__)
 
-
 class GroqAdapter:
-    """
-    Adapter for Groq API (cloud-based LLM).
-
-    Advantages:
-    - Ultra-fast inference (50-100x faster than local CPU)
-    - Free tier with generous limits (30 req/min)
-    - Same models as Ollama (Llama 3.1, etc.)
-    """
-
     def __init__(
         self,
         api_key: str,
@@ -34,18 +17,6 @@ class GroqAdapter:
         max_tokens: int = 2048,
         max_retries: int = 3,
     ):
-        """
-        Initialize Groq adapter.
-
-        Args:
-            api_key: Groq API key
-            model: Model name (e.g., "llama-3.1-8b-instant")
-            temperature: Sampling temperature (0.0-1.0)
-            top_p: Nucleus sampling parameter
-            timeout: Request timeout in seconds
-            max_tokens: Maximum tokens in response (default: 2048, free tier limit: 6000 TPM)
-            max_retries: Maximum retry attempts for rate limit errors (default: 3)
-        """
         if not api_key:
             raise ValueError("Groq API key is required")
 
@@ -68,27 +39,11 @@ class GroqAdapter:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """
-        Generate completion using Groq API with automatic retry on rate limits.
-
-        Args:
-            prompt: User prompt
-            system_prompt: System instructions
-            options: Additional generation options (temperature, max_tokens, etc.)
-
-        Returns:
-            Generated text
-
-        Raises:
-            Exception: If Groq API call fails after all retries
-        """
-        # Prepare messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Merge options
         generation_options = {
             "model": self.model,
             "messages": messages,
@@ -100,7 +55,6 @@ class GroqAdapter:
         if options:
             generation_options.update(options)
 
-        # Retry logic with exponential backoff
         for attempt in range(self.max_retries):
             try:
                 logger.debug(
@@ -110,10 +64,8 @@ class GroqAdapter:
 
                 response = self.client.chat.completions.create(**generation_options)
 
-                # Extract text
                 text = response.choices[0].message.content
 
-                # Log token usage if available
                 if hasattr(response, 'usage') and response.usage:
                     logger.info(
                         f"Groq API success: {len(text)} chars, "
@@ -127,7 +79,7 @@ class GroqAdapter:
                 return text
 
             except RateLimitError as e:
-                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** attempt
                 logger.warning(
                     f"Rate limit hit (attempt {attempt + 1}/{self.max_retries}): {e}. "
                     f"Waiting {wait_time}s before retry..."
@@ -152,40 +104,23 @@ class GroqAdapter:
         system_prompt: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Iterable[str]:
-        """
-        Stream completion tokens using Groq API with automatic retry on rate limits.
-
-        Args:
-            prompt: User prompt
-            system_prompt: System instructions
-            options: Additional generation options
-
-        Yields:
-            Text chunks as they are generated
-
-        Raises:
-            Exception: If Groq API call fails after all retries
-        """
-        # Prepare messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Merge options
         generation_options = {
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "max_tokens": self.max_tokens,
-            "stream": True,  # Enable streaming
+            "stream": True,
         }
 
         if options:
             generation_options.update(options)
 
-        # Retry logic with exponential backoff
         for attempt in range(self.max_retries):
             try:
                 logger.debug(
@@ -195,20 +130,18 @@ class GroqAdapter:
 
                 stream = self.client.chat.completions.create(**generation_options)
 
-                # Track tokens for logging
                 total_chunks = 0
 
-                # Yield tokens
                 for chunk in stream:
                     if chunk.choices[0].delta.content:
                         total_chunks += 1
                         yield chunk.choices[0].delta.content
 
                 logger.info(f"Groq streaming completed successfully ({total_chunks} chunks)")
-                return  # Success, exit retry loop
+                return
 
             except RateLimitError as e:
-                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** attempt
                 logger.warning(
                     f"Rate limit hit during streaming (attempt {attempt + 1}/{self.max_retries}): {e}. "
                     f"Waiting {wait_time}s before retry..."
