@@ -9,6 +9,66 @@ import jwt
 
 from app.core.config import get_settings
 
+settings = get_settings()
+
+def create_tokens(user_id: int, is_admin: bool = False) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    
+    access_exp = now + timedelta(minutes=settings.access_token_expire_minutes)
+    access_jti = secrets.token_hex(16)
+    access_payload = {
+        'sub': str(user_id),
+        'iss': settings.app_name,
+        'iat': int(now.timestamp()),
+        'exp': int(access_exp.timestamp()),
+        'jti': access_jti,
+        'type': 'access',
+        'is_admin': is_admin,
+    }
+    access_token = jwt.encode(
+        access_payload,
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm
+    )
+    
+    refresh_exp = now + timedelta(days=7)
+    refresh_jti = secrets.token_hex(16)
+    refresh_payload = {
+        'sub': str(user_id),
+        'iss': settings.app_name,
+        'iat': int(now.timestamp()),
+        'exp': int(refresh_exp.timestamp()),
+        'jti': refresh_jti,
+        'type': 'refresh',
+    }
+    refresh_token = jwt.encode(
+        refresh_payload,
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm
+    )
+    
+    return {
+        'access_token': access_token,
+        'access_jti': access_jti,
+        'access_expires_at': access_exp,
+        'refresh_token': refresh_token,
+        'refresh_jti': refresh_jti,
+        'refresh_expires_at': refresh_exp,
+    }
+
+
+def create_access_token(user_id: int, is_admin: bool = False) -> str:
+    tokens = create_tokens(user_id, is_admin)
+    return tokens['access_token']
+
+
+def decode_token(token: str) -> Dict[str, Any]:
+    return jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"verify_exp": True}
+    )
 
 def _pbkdf2_hash(password: str, salt: bytes, iterations: int = 200_000) -> bytes:
     return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
