@@ -283,11 +283,6 @@ _global_instance = None
 
 
 def get_vector_store_instance() -> VectorStoreService:
-    """Get or create global vector store instance.
-
-    This is a temporary helper for backward compatibility.
-    Prefer using FastAPI dependency injection via api/deps.py
-    """
     global _global_instance
     if _global_instance is None:
         _global_instance = VectorStoreService()
