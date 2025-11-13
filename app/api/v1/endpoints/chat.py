@@ -18,17 +18,14 @@ from app.api.deps import get_conversation_repo, get_chat_usecase, get_vector_sto
 from app.domain.ports import ConversationPort, VectorStorePort
 from app.api.security import get_current_user, get_optional_user
 
-
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
 
 @router.post(
     "",
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
     summary="Enviar pergunta para o assistente",
-    description="Recebe uma pergunta e retorna resposta baseada na base de conhecimento",
     responses={
         200: {"description": "Resposta gerada com sucesso"},
         400: {"description": "Dados inválidos", "model": ErrorResponse},
@@ -77,11 +74,9 @@ async def chat(
             detail="Erro ao processar sua pergunta. Tente novamente.",
         )
 
-
 @router.post(
     "/stream",
     summary="Chat com streaming (tempo real)",
-    description="Retorna a resposta em tempo real (Server-Sent Events)",
     responses={
         200: {"description": "Stream de resposta"},
         400: {"description": "Dados inválidos", "model": ErrorResponse},
@@ -94,7 +89,6 @@ async def chat_stream(
     usecase = Depends(get_chat_usecase),
     current_user = Depends(get_optional_user),
 ) -> StreamingResponse:
-    # FIX Bug 1.2: Adicionar logging como no endpoint não-stream
     logger.info(
         f"Nova requisição de chat stream | session_id={request.session_id} | "
         f"question_length={len(request.question) if request.question else 0}"
@@ -102,7 +96,6 @@ async def chat_stream(
 
     async def generate():
         try:
-            # FIX Bug 1.1: Validação segura - verifica None primeiro antes de chamar strip()
             if not request.question:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Pergunta não pode estar vazia.'}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -120,7 +113,6 @@ async def chat_stream(
             ):
                 yield chunk
 
-        # FIX Bug 5.1: Tratamento específico de erros
         except HTTPException as http_err:
             logger.warning(f"Erro HTTP no streaming: {http_err.detail}")
             yield f"data: {json.dumps({'type': 'error', 'message': http_err.detail}, ensure_ascii=False)}\n\n"
@@ -132,7 +124,6 @@ async def chat_stream(
         except Exception as e:
             logger.error(f"Erro inesperado no streaming: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao gerar resposta. Tente novamente.'}, ensure_ascii=False)}\n\n"
-            # FIX Bug 5.2: SEMPRE enviar done event mesmo em erro
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(
@@ -145,21 +136,17 @@ async def chat_stream(
         },
     )
 
-
 @router.get(
     "/health",
     response_model=Dict[str, str],
     summary="Verificar saúde do serviço de chat",
-    description="Health check do serviço de chat",
 )
 async def health_check() -> Dict[str, str]:
     return {"status": "healthy", "service": "chat"}
 
-
 @router.get(
     "/models",
     summary="Listar modelos disponíveis",
-    description="Retorna informações sobre os modelos LLM e embedding disponíveis",
 )
 async def list_models() -> Dict[str, Any]:
     from app.core.config import get_settings
@@ -181,7 +168,6 @@ async def list_models() -> Dict[str, Any]:
             "min_score": settings.min_similarity_score,
         },
     }
-
 
 @router.post(
     "/feedback",
@@ -243,7 +229,6 @@ async def submit_feedback(
     "/sessions",
     response_model=SessionsResponse,
     summary="Listar sessões do usuário",
-    description="Retorna todas as sessões de chat do usuário autenticado",
     responses={
         200: {"description": "Lista de sessões"},
         401: {"description": "Não autenticado", "model": ErrorResponse},
@@ -260,39 +245,29 @@ async def list_sessions(
     import re
 
     def sanitize_message_preview(text: str, max_length: int = 100) -> str:
-        """Remove markdown, HTML tags e limita tamanho da mensagem"""
         if not text:
             return "Nova conversa"
 
-        # Remove markdown headers (##, ###, etc)
         text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
 
-        # Remove markdown bold/italic (**texto**, *texto*, __texto__)
         text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
         text = re.sub(r'\*([^\*]+)\*', r'\1', text)
         text = re.sub(r'__([^_]+)__', r'\1', text)
         text = re.sub(r'_([^_]+)_', r'\1', text)
 
-        # Remove links markdown [texto](url)
         text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
 
-        # Remove code blocks (```código```, `código`)
         text = re.sub(r'```[\s\S]*?```', '', text)
         text = re.sub(r'`([^`]+)`', r'\1', text)
 
-        # Remove HTML tags
         text = re.sub(r'<[^>]+>', '', text)
 
-        # Remove múltiplas quebras de linha
         text = re.sub(r'\n+', ' ', text)
 
-        # Remove múltiplos espaços
         text = re.sub(r'\s+', ' ', text)
 
-        # Trim
         text = text.strip()
 
-        # Limita tamanho
         if len(text) > max_length:
             text = text[:max_length].rsplit(' ', 1)[0] + '...'
 
@@ -337,12 +312,10 @@ async def list_sessions(
             detail="Erro ao listar sessões",
         )
 
-
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Deletar sessão de chat",
-    description="Deleta uma sessão de chat e todas as suas mensagens e feedbacks associados",
     responses={
         204: {"description": "Sessão deletada com sucesso"},
         401: {"description": "Não autenticado", "model": ErrorResponse},
@@ -360,7 +333,6 @@ async def delete_session(
     try:
         logger.info(f"Tentativa de deletar sessão {session_id} por user_id={current_user['id']}")
 
-        # Verificar se a sessão existe
         conv = conv_service.get_conversation(session_id)
         if not conv:
             raise HTTPException(
@@ -368,13 +340,11 @@ async def delete_session(
                 detail="Sessão não encontrada",
             )
 
-        # Verificar ownership
         owner_id = conv.get("user_id")
         current_id = str(current_user["id"])
         is_admin = bool(current_user.get("is_admin"))
 
         if owner_id:
-            # Comparação segura de IDs
             try:
                 owner_id_cmp = int(owner_id) if owner_id else None
                 current_id_cmp = int(current_user["id"]) if current_user.get("id") else None
@@ -394,7 +364,6 @@ async def delete_session(
                     detail="Sessão sem proprietário. Apenas administradores podem deletar",
                 )
 
-        # Deletar a sessão
         deleted = conv_service.delete_conversation(session_id)
         if not deleted:
             raise HTTPException(
@@ -414,12 +383,10 @@ async def delete_session(
             detail="Erro ao deletar sessão",
         )
 
-
 @router.get(
     "/history",
     response_model=ChatHistoryResponse,
     summary="Consultar histórico de conversa",
-    description="Retorna as mensagens de uma sessão de chat (user/assistant) em ordem cronológica",
     responses={
         200: {"description": "Histórico da sessão"},
         400: {"description": "Dados inválidos", "model": ErrorResponse},
@@ -447,7 +414,6 @@ async def get_history(
         is_admin = bool(current_user.get("is_admin"))
 
         if owner:
-            # Comparação segura de IDs (converte para int se possível)
             try:
                 owner_id = int(owner) if owner else None
                 current_id = int(current_user["id"]) if current_user.get("id") else None
@@ -530,4 +496,3 @@ async def get_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao obter histórico",
         )
-

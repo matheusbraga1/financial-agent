@@ -3,10 +3,8 @@ from typing import Dict, Any
 import logging
 import httpx
 
-
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
 
 @router.get(
     "/health/liveness",
@@ -16,12 +14,7 @@ logger = logging.getLogger(__name__)
     status_code=status.HTTP_200_OK,
 )
 async def liveness() -> Dict[str, str]:
-    """
-    Liveness check — apenas verifica se a aplicação está rodando.
-    Não verifica dependências externas.
-    """
     return {"status": "alive"}
-
 
 @router.get(
     "/health/readiness",
@@ -58,18 +51,17 @@ async def liveness() -> Dict[str, str]:
         },
     },
 )
+
 async def readiness() -> Dict[str, Any]:
-    """
-    Readiness check — verifica todas as dependências externas.
-    Retorna 503 se alguma dependência estiver falhando.
-    """
-    from app.services.vector_store_service import vector_store_service
+    from app.services.vector_store_service import get_vector_store_instance
     from app.services.glpi_service import glpi_service
     from app.core.config import get_settings
     from fastapi import Response
 
     settings = get_settings()
     checks: Dict[str, str] = {}
+    
+    vector_store_service = get_vector_store_instance()
 
     checks["qdrant"] = await _check_qdrant(vector_store_service)
     checks["ollama"] = await _check_ollama(settings.ollama_host)
@@ -90,9 +82,7 @@ async def readiness() -> Dict[str, Any]:
 
     return response
 
-
 async def _check_qdrant(vector_store) -> str:
-    """Verifica conexão com Qdrant."""
     try:
         vector_store.client.get_collections()
         collection_info = vector_store.get_collection_info()
@@ -103,9 +93,7 @@ async def _check_qdrant(vector_store) -> str:
         logger.error(f"Qdrant health check failed: {e}")
         return f"unhealthy: {str(e)[:100]}"
 
-
 async def _check_ollama(ollama_host: str) -> str:
-    """Verifica conexão com Ollama."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{ollama_host}/api/tags")
@@ -122,9 +110,7 @@ async def _check_ollama(ollama_host: str) -> str:
         logger.error(f"Ollama health check failed: {e}")
         return f"unhealthy: {str(e)[:100]}"
 
-
 async def _check_glpi_db(glpi_service) -> str:
-    """Verifica conexão com banco GLPI."""
     try:
         if glpi_service.test_connection():
             return "healthy"
@@ -132,7 +118,6 @@ async def _check_glpi_db(glpi_service) -> str:
     except Exception as e:
         logger.error(f"GLPI DB health check failed: {e}")
         return f"unhealthy: {str(e)[:100]}"
-
 
 @router.get(
     "/health",
@@ -142,9 +127,4 @@ async def _check_glpi_db(glpi_service) -> str:
     status_code=status.HTTP_200_OK,
 )
 async def health() -> Dict[str, str]:
-    """
-    Health check simplificado para compatibilidade com versões antigas.
-    Para checks completos, use /health/readiness
-    """
     return {"status": "healthy", "message": "Use /health/readiness para verificação completa"}
-
