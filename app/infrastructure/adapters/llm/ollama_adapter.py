@@ -8,7 +8,7 @@ class OllamaAdapter:
     def __init__(
         self,
         host: str = "http://localhost:11434",
-        model: str = "llama3.1:8b",
+        model: str = "qwen2.5:3b",
         temperature: float = 0.2,
         top_p: float = 0.9,
         timeout: int = 120,
