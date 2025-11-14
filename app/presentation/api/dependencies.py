@@ -13,7 +13,7 @@ from app.domain.services.rag.confidence_scorer import ConfidenceScorer
 from app.domain.services.rag.answer_generator import AnswerGenerator
 from app.domain.services.rag.document_retriever import DocumentRetriever
 from app.domain.services.rag.memory_manager import MemoryManager
-from app.domain.services.document_processor import DocumentProcessor
+from app.domain.services.documents.document_processor import DocumentProcessor
 
 from app.domain.services.rag.reranking.cross_encoder_reranker import CrossEncoderReranker
 from app.domain.services.rag.clarifier import Clarifier
@@ -60,7 +60,6 @@ def get_vector_store_adapter() -> QdrantAdapter:
         port=settings.qdrant_port,
         collection_name=settings.qdrant_collection,
         vector_size=settings.embedding_dimension,
-        distance="Cosine",
     )
 
 @lru_cache()
@@ -281,47 +280,70 @@ def get_ingest_document_use_case(
     vector_store: QdrantAdapter = Depends(get_vector_store_adapter),
 ) -> IngestDocumentUseCase:
     logger.debug("Criando IngestDocumentUseCase")
-    
+
     return IngestDocumentUseCase(
         document_processor=document_processor,
         embeddings_port=embeddings,
         vector_store_port=vector_store,
     )
 
+def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        HTTPBearer(auto_error=False)
+    ),
+) -> Optional[dict]:
+    if not credentials:
+        return None
+
+    try:
+        return get_current_user(credentials)
+    except HTTPException:
+        return None
+
+def get_conversation_repository():
+    return conversation_repository
+
+
+def get_user_repository():
+    return user_repository
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    user_repo = Depends(get_user_repository),
 ) -> dict:
     from app.presentation.api.security import decode_access_token
-    
+
     token = credentials.credentials
-    
+
     try:
         payload = decode_access_token(token)
-        
+
         if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token inválido ou expirado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        user = user_repository.get_user_by_id(payload["sub"])
-        
+
+        user_id = int(payload["sub"])
+        user = user_repo.get_user_by_id(user_id)
+
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Usuário não encontrado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
+
         if not user["is_active"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Usuário inativo",
             )
-        
+
         return user
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -332,18 +354,6 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
-        HTTPBearer(auto_error=False)
-    ),
-) -> Optional[dict]:
-    if not credentials:
-        return None
-    
-    try:
-        return get_current_user(credentials)
-    except HTTPException:
-        return None
 
 def get_current_admin_user(
     current_user: dict = Depends(get_current_user),
@@ -353,15 +363,8 @@ def get_current_admin_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acesso negado: privilégios de administrador necessários",
         )
-    
+
     return current_user
-
-def get_conversation_repository():
-    return conversation_repository
-
-
-def get_user_repository():
-    return user_repository
 
 
 def get_vector_store():

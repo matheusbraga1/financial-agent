@@ -7,7 +7,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from app.core.config import get_settings
+from app.infrastructure.config.settings import get_settings
 from app.presentation.api.v1.router import api_router
 
 from app.presentation.api.middleware import (

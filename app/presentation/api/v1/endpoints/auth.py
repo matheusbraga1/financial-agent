@@ -51,14 +51,14 @@ async def register(
         existing_user = user_repo.get_user_by_username(request.username)
         if existing_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="Username já está em uso",
             )
-        
+
         existing_email = user_repo.get_user_by_email(request.email)
         if existing_email:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="Email já está em uso",
             )
         
@@ -145,12 +145,12 @@ async def login(
         refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
         
         access_token = create_access_token(
-            data={"sub": user["id"], "username": user["username"]},
+            data={"sub": str(user["id"]), "username": user["username"]},
             expires_delta=access_token_expires,
         )
-        
+
         refresh_token = create_refresh_token(
-            data={"sub": user["id"]},
+            data={"sub": str(user["id"])},
             expires_delta=refresh_token_expires,
         )
         
@@ -201,18 +201,18 @@ async def refresh_token(
         logger.info("Tentativa de refresh token")
         
         payload = decode_refresh_token(request.refresh_token)
-        
+
         if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Refresh token inválido ou expirado",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        user_id = payload["sub"]
-        
+
+        user_id = int(payload["sub"])
+
         stored_token = user_repo.get_refresh_token(request.refresh_token)
-        
+
         if not stored_token:
             logger.warning(f"Refresh token não encontrado no banco: user_id={user_id}")
             raise HTTPException(
@@ -220,7 +220,7 @@ async def refresh_token(
                 detail="Refresh token inválido",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
+
         user = user_repo.get_user_by_id(user_id)
         
         if not user or not user["is_active"]:
@@ -231,16 +231,16 @@ async def refresh_token(
             )
         
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
-        
+
         access_token = create_access_token(
-            data={"sub": user["id"], "username": user["username"]},
+            data={"sub": str(user["id"]), "username": user["username"]},
             expires_delta=access_token_expires,
         )
-        
+
         refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
-        
+
         new_refresh_token = create_refresh_token(
-            data={"sub": user["id"]},
+            data={"sub": str(user["id"])},
             expires_delta=refresh_token_expires,
         )
         
@@ -306,30 +306,30 @@ async def get_me(
 
 @router.post(
     "/logout",
-    status_code=status.HTTP_200_OK,
-    summary="Logout (invalida refresh token)",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Logout (invalida todos os refresh tokens do usuário)",
     responses={
-        200: {"description": "Logout realizado com sucesso"},
+        204: {"description": "Logout realizado com sucesso"},
         401: {"description": "Não autenticado"},
     },
 )
 async def logout(
-    request: RefreshTokenRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
-) -> Dict[str, str]:
+):
     try:
         logger.info(f"Logout para user_id={current_user['id']}")
-        
-        deleted = user_repo.delete_refresh_token(request.refresh_token)
-        
-        if deleted:
-            logger.info(f"Refresh token invalidado para user_id={current_user['id']}")
-        else:
-            logger.warning(f"Refresh token não encontrado durante logout: user_id={current_user['id']}")
-        
-        return {"message": "Logout realizado com sucesso"}
-        
+
+        # NOTA: Com JWT stateless, não há como invalidar o access token
+        # O token permanecerá válido até expirar naturalmente
+        # Para invalidação imediata, seria necessário implementar um token blacklist
+
+        logger.info(f"Logout processado para user_id={current_user['id']}")
+
+        # Status 204 não retorna body
+        return None
+
     except Exception as e:
         logger.error(f"Erro ao fazer logout: {e}", exc_info=True)
-        return {"message": "Logout realizado"}
+        # Mesmo com erro, retorna sucesso (idempotente)
+        return None

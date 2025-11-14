@@ -31,7 +31,7 @@ from app.infrastructure.adapters.external.glpi_client import GLPIService
 from app.infrastructure.adapters.vector_store.qdrant_adapter import QdrantAdapter
 from app.infrastructure.adapters.embeddings.sentence_transformer_adapter import EmbeddingService
 from app.models.document import DocumentCreate
-from app.core.config import get_settings
+from app.infrastructure.config.settings import get_settings
 from app.core.logging import setup_logging
 
 # Setup logging

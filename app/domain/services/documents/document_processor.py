@@ -5,7 +5,8 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 
-from app.domain.value_objects.document_metadata import DocumentMetadata, ChunkMetadata
+from app.domain.value_objects.document_metadata import DocumentMetadata
+from app.domain.documents.metadata_schema import ChunkMetadata
 
 logger = logging.getLogger(__name__)
 

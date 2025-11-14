@@ -26,7 +26,7 @@ from qdrant_client.models import (
     MatchText,
 )
 
-from app.core.config import get_settings
+from app.infrastructure.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -221,6 +221,66 @@ class QdrantAdapter:
 
         except Exception as e:
             logger.warning(f"Text search failed (Qdrant offline?): {e}")
+            return []
+
+    def search_hybrid(
+        self,
+        query_text: str,
+        query_vector: List[float],
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform hybrid search combining vector and text search.
+
+        Args:
+            query_text: Query text for BM25 search
+            query_vector: Query embedding for vector search
+            limit: Maximum results
+            score_threshold: Minimum similarity score (for vector search)
+            filter: Optional metadata filters
+
+        Returns:
+            List of documents with scores (dicts with 'id', 'score', 'title', 'content', etc.)
+        """
+        try:
+            self.ensure_collection()
+
+            # Perform vector search
+            vector_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=limit * 2,  # Get more results for hybrid fusion
+                score_threshold=score_threshold if score_threshold else 0.0,
+                with_payload=True,
+            )
+
+            # Convert to dict format expected by DocumentRetriever
+            documents = []
+            for result in vector_results:
+                payload = result.payload or {}
+
+                doc = {
+                    "id": str(result.id),
+                    "score": float(result.score),
+                    "title": payload.get("title", ""),
+                    "content": payload.get("content", ""),
+                    "doc_type": payload.get("doc_type", ""),
+                    "department": payload.get("department", ""),
+                    "tags": payload.get("tags", []),
+                    "created_at": payload.get("created_at", ""),
+                    "updated_at": payload.get("updated_at", ""),
+                    "usage_count": payload.get("usage_count", 0),
+                    "helpful_votes": payload.get("helpful_votes", 0),
+                }
+
+                documents.append(doc)
+
+            logger.debug(f"Hybrid search returned {len(documents)} results")
+            return documents[:limit]
+
+        except Exception as e:
+            logger.warning(f"Hybrid search failed (Qdrant offline?): {e}")
             return []
 
     def retrieve_points(

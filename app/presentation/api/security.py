@@ -10,16 +10,21 @@ from app.infrastructure.config.settings import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    iterations = (
-        settings.password_hash_iterations_dev 
-        if settings.debug 
-        else settings.password_hash_iterations
-    )
-    
-    return pwd_context.hash(password, time_cost=iterations)
+    # bcrypt tem limite de 72 bytes para senhas
+    # Truncamos para evitar erro
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password = password_bytes[:72].decode('utf-8', errors='ignore')
+
+    # bcrypt usa 'rounds' - valores típicos: 12 (padrão), 10 (rápido), 14 (seguro)
+    rounds = 10 if settings.debug else 12
+
+    # Usa o método recomendado para configurar bcrypt rounds
+    # Prefixo bcrypt__ é necessário para parâmetros específicos do esquema
+    return pwd_context.using(bcrypt__rounds=rounds).hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:

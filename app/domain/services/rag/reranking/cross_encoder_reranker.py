@@ -10,7 +10,7 @@ class CrossEncoderReranker:
     
     def __init__(
         self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        model_name: str = "jinaai/jina-reranker-v2-base-multilingual",
         device: str = "cpu",
     ):
         self.model_name = model_name
@@ -18,13 +18,22 @@ class CrossEncoderReranker:
         
         if model_name not in self._model_cache:
             logger.info(f"Carregando cross-encoder: {model_name}")
-            
+
             try:
-                self._model_cache[model_name] = CrossEncoder(
-                    model_name,
-                    device=device,
-                    max_length=512,
-                )
+                # Jina models require trust_remote_code=True
+                if "jina" in model_name.lower():
+                    self._model_cache[model_name] = CrossEncoder(
+                        model_name,
+                        device=device,
+                        max_length=512,
+                        trust_remote_code=True,
+                    )
+                else:
+                    self._model_cache[model_name] = CrossEncoder(
+                        model_name,
+                        device=device,
+                        max_length=512,
+                    )
                 logger.info(f"Cross-encoder carregado: {model_name}")
             except Exception as e:
                 logger.error(f"Erro ao carregar cross-encoder: {e}")
