@@ -122,17 +122,17 @@ def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
         )
-        
+
         if payload.get("type") != "refresh":
             logger.warning("Token não é do tipo 'refresh'")
             return None
-        
+
         if "sub" not in payload:
             logger.warning("Token sem 'sub' (user_id)")
             return None
-        
+
         return payload
-        
+
     except jwt.ExpiredSignatureError:
         logger.debug("Refresh token expirado")
         return None
@@ -142,3 +142,42 @@ def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Erro ao decodificar refresh token: {e}")
         return None
+
+def revoke_token(token: str) -> bool:
+    """
+    Revoga um token adicionando-o à blacklist no Redis.
+
+    Args:
+        token: O token JWT a ser revogado
+
+    Returns:
+        True se o token foi revogado com sucesso, False caso contrário
+    """
+    try:
+        from app.presentation.api.dependencies import get_jwt_handler
+
+        # Decodifica o token para obter o jti e exp
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False}  # Permite decodificar token expirado
+        )
+
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+
+        if not jti or not exp:
+            logger.warning("Token sem jti ou exp - não pode ser revogado")
+            return False
+
+        # Converte timestamp para datetime
+        exp_datetime = datetime.fromtimestamp(exp)
+
+        # Usa o JWT handler para revogar
+        jwt_handler = get_jwt_handler()
+        return jwt_handler.revoke_token(jti, exp_datetime)
+
+    except Exception as e:
+        logger.error(f"Erro ao revogar token: {e}")
+        return False
