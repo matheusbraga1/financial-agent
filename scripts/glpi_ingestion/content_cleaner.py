@@ -172,22 +172,38 @@ class ContentCleaner:
         return content
 
     def _remove_non_printable(self, content: str) -> str:
-        """Remove non-printable characters (except newlines and tabs)."""
+        """
+        Remove non-printable characters (except newlines and tabs).
+
+        Preserves all valid UTF-8 characters including accented letters.
+        Only removes control characters that are not whitespace.
+        """
         return ''.join(
             char for char in content
-            if char.isprintable() or char in '\n\t'
+            if (
+                char.isprintable()  # Printable characters (includes accented letters)
+                or char in '\n\t\r'  # Preserve newlines, tabs, carriage returns
+                or unicodedata.category(char)[0] == 'L'  # All letters (including accented)
+                or unicodedata.category(char)[0] == 'N'  # All numbers
+                or unicodedata.category(char)[0] == 'P'  # All punctuation
+                or unicodedata.category(char)[0] == 'S'  # All symbols
+            )
         )
 
     def _fix_encoding(self, content: str) -> str:
         """
-        Try to fix encoding issues using ftfy (if available).
+        Try to fix encoding issues ONLY if ftfy is available.
 
-        Falls back to basic encoding fixes if ftfy is not installed.
+        IMPORTANT: MySQL with charset=utf8mb4 already returns correct UTF-8.
+        We should NOT try to "fix" encoding manually as it can corrupt valid data.
+        Only use ftfy library which is designed for this purpose.
+
+        Falls back to returning content unchanged if ftfy is not installed.
         """
         if not content:
             return content
 
-        # If ftfy is available, use it
+        # ONLY use ftfy if available - it's safe and tested
         if HAS_FTFY:
             try:
                 fixed = ftfy.fix_text(content)
@@ -197,31 +213,12 @@ class ContentCleaner:
             except Exception as e:
                 logger.debug(f"Failed to fix encoding with ftfy: {e}")
 
-        # Fallback: Basic encoding fixes
-        # Try to fix common encoding issues manually
-        try:
-            # Check for mojibake patterns
-            if "??" in content or "\ufffd" in content:
-                # Try UTF-8 misread as latin1
-                try:
-                    fixed = content.encode('utf-8', errors='ignore').decode('latin1', errors='ignore')
-                    if "??" not in fixed and len(fixed) > len(content) * 0.8:
-                        logger.debug("Fixed encoding using UTF-8 -> latin1")
-                        return fixed
-                except Exception:
-                    pass
-
-                # Try latin1 misread as UTF-8
-                try:
-                    fixed = content.encode('latin1', errors='ignore').decode('utf-8', errors='ignore')
-                    if "??" not in fixed and len(fixed) > len(content) * 0.8:
-                        logger.debug("Fixed encoding using latin1 -> UTF-8")
-                        return fixed
-                except Exception:
-                    pass
-
-        except Exception as e:
-            logger.debug(f"Failed to fix encoding manually: {e}")
+        # NO MANUAL ENCODING FIXES - they corrupt valid UTF-8 data
+        # If you see "???" in output:
+        # 1. Check MySQL connection charset is utf8mb4 ✓ (already correct)
+        # 2. Check database column encoding is utf8mb4
+        # 3. Install ftfy: pip install ftfy
+        # 4. Check source data in MySQL directly
 
         return content
 
