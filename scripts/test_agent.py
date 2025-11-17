@@ -388,7 +388,7 @@ class FinancialAgentTester:
 
                                 elif event_type == "token":
                                     token = event_data or ""
-                                    console.print(token, end="", flush=True)
+                                    console.print(token, end="")
                                     full_answer += token
                                     self.total_tokens += 1
 
