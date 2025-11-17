@@ -170,17 +170,10 @@ def _add_utility_endpoints(app: FastAPI) -> None:
             "app": settings.app_name,
             "version": settings.app_version,
             "docs": "/docs" if settings.debug else None,
-            "health": "/health",
+            "health": "/api/v1/health",
         }
 
-    @app.get("/health", tags=["Health"])
-    async def health_check() -> Dict[str, Any]:
-        return {
-            "status": "healthy",
-            "app": settings.app_name,
-            "version": settings.app_version,
-        }
-    logger.info("✓ Utility endpoints configured (/, /health)")
+    logger.info("✓ Utility endpoints configured (/)")
 
 app = create_application()
 
