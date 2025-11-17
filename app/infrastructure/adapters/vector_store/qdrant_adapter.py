@@ -468,3 +468,19 @@ class QdrantAdapter:
             "vector_size": vector_size,
             "exists": exists,
         }
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get collection statistics (alias for get_collection_info with health check format).
+
+        Returns:
+            Dict with stats including name, vectors_count, indexed_vectors_count, and status
+        """
+        info = self.get_collection_info()
+        vectors_count = info.get("vectors_count", 0) or 0
+
+        return {
+            "name": info.get("name"),
+            "vectors_count": vectors_count,
+            "indexed_vectors_count": vectors_count,  # Qdrant indexes all vectors automatically
+            "status": "ok" if info.get("exists") else "not_found",
+        }
