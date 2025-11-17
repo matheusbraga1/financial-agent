@@ -8,6 +8,10 @@ import argparse
 from dataclasses import dataclass, asdict
 import json
 import unicodedata
+import base64
+import re
+from html import unescape
+from bs4 import BeautifulSoup
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -25,23 +29,234 @@ from app.domain.documents.metadata_schema import (
     Department,
     DocType,
 )
-from app.domain.services.rag.classification.domain_classifier import DomainClassifier
+from app.domain.services.rag.domain_classifier import DomainClassifier
 
 # Import infrastructure services
-from app.infrastructure.adapters.external.glpi_client import GLPIService
+from app.infrastructure.adapters.external.glpi_client import GLPIClient
 from app.infrastructure.adapters.vector_store.qdrant_adapter import QdrantAdapter
-from app.infrastructure.adapters.embeddings.sentence_transformer_adapter import EmbeddingService
+from app.infrastructure.adapters.embeddings.sentence_transformer_adapter import SentenceTransformerAdapter
 from app.models.document import DocumentCreate
 from app.infrastructure.config.settings import get_settings
-from app.core.logging import setup_logging
 
 # Setup logging
-setup_logging()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Get settings
 settings = get_settings()
+
+
+def is_base64(text: str) -> bool:
+    """
+    Check if a string is base64 encoded.
+
+    Args:
+        text: String to check
+
+    Returns:
+        True if the string appears to be base64 encoded
+    """
+    if not text or len(text) < 50:
+        return False
+
+    # Check for base64 characteristics
+    # - Only contains base64 characters
+    # - Length is multiple of 4 (with padding)
+    # - High ratio of alphanumeric characters
+    base64_pattern = re.compile(r'^[A-Za-z0-9+/=]+$')
+
+    # Remove whitespace
+    text_clean = text.strip()
+
+    # Check if it matches base64 pattern
+    if not base64_pattern.match(text_clean):
+        return False
+
+    # Check if length is appropriate for base64
+    if len(text_clean) % 4 != 0:
+        return False
+
+    # Try to decode - if it fails, it's not base64
+    try:
+        decoded = base64.b64decode(text_clean)
+        # Check if decoded content is mostly text
+        try:
+            decoded.decode('utf-8')
+            return True
+        except:
+            return False
+    except:
+        return False
+
+
+def decode_base64_content(text: str) -> str:
+    """
+    Decode base64 encoded content.
+
+    Args:
+        text: Potentially base64 encoded string
+
+    Returns:
+        Decoded string or original if decoding fails
+    """
+    try:
+        decoded_bytes = base64.b64decode(text)
+        decoded_text = decoded_bytes.decode('utf-8')
+        return decoded_text
+    except Exception as e:
+        logger.warning(f"Failed to decode base64: {e}")
+        return text
+
+
+def clean_html(html_content: str) -> str:
+    """
+    Clean HTML content and extract plain text.
+
+    Args:
+        html_content: HTML string
+
+    Returns:
+        Plain text without HTML tags
+    """
+    if not html_content:
+        return ""
+
+    try:
+        # Parse HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        # Get text
+        text = soup.get_text()
+
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+
+        return text
+    except Exception as e:
+        logger.warning(f"Failed to clean HTML: {e}")
+        return html_content
+
+
+def fix_encoding(text: str) -> str:
+    """
+    Try to fix encoding issues in text using ftfy library.
+
+    Common issues:
+    - Text was stored as latin1 but read as utf8
+    - Mojibake (mixed encoding issues)
+    - Missing or incorrect character mappings
+
+    Args:
+        text: Text with potential encoding issues
+
+    Returns:
+        Fixed text
+    """
+    if not text:
+        return text
+
+    return text
+
+
+def clean_glpi_content(content: str, title: str = "") -> str:
+    """
+    Clean and normalize GLPI content.
+
+    This function:
+    1. Detects and decodes base64 content
+    2. Cleans HTML tags and entities
+    3. Normalizes whitespace
+    4. Removes special characters and artifacts
+    5. Fixes encoding issues
+
+    Args:
+        content: Raw content from GLPI
+        title: Article title (for logging)
+
+    Returns:
+        Cleaned plain text content
+    """
+    if not content:
+        return ""
+
+    original_length = len(content)
+
+    # Step 1: Check if content is base64 encoded
+    if is_base64(content):
+        logger.info(f"Detected base64 content in '{title[:50]}...', decoding")
+        content = decode_base64_content(content)
+
+    # Step 2: Decode HTML entities (e.g., &lt;, &gt;, &#60;, &#62;)
+    content = unescape(content)
+
+    # Step 3: Clean HTML tags
+    content = clean_html(content)
+
+    # Step 4: Fix common encoding issues
+    # Replace HTML-escaped characters
+    replacements = {
+        '&nbsp;': ' ',
+        '&quot;': '"',
+        '&apos;': "'",
+        '&amp;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '\r\n': '\n',
+        '\r': '\n',
+    }
+
+    for old, new in replacements.items():
+        content = content.replace(old, new)
+
+    # Step 5: Remove multiple consecutive whitespace/newlines
+    content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)  # Max 2 newlines
+    content = re.sub(r' +', ' ', content)  # Single spaces only
+
+    # Step 6: Remove non-printable characters (except newlines, tabs)
+    content = ''.join(char for char in content if char.isprintable() or char in '\n\t')
+
+    # Step 7: Fix encoding issues (e.g., ?? -> á, ã, etc.)
+    content = fix_encoding(content)
+
+    # Step 8: Normalize unicode
+    content = unicodedata.normalize('NFC', content)
+
+    # Step 9: Strip leading/trailing whitespace
+    content = content.strip()
+
+    cleaned_length = len(content)
+
+    # Calculate reduction percentage
+    reduction_pct = ((original_length - cleaned_length) / original_length * 100) if original_length > 0 else 0
+
+    # Log based on reduction severity
+    if cleaned_length < original_length * 0.15:  # Less than 15% remaining - very suspicious
+        logger.warning(
+            f"Extreme content reduction: {original_length} -> {cleaned_length} chars ({reduction_pct:.0f}% reduced) "
+            f"for '{title[:50]}...'. Content may be mostly HTML/formatting."
+        )
+    elif cleaned_length < original_length * 0.30:  # 15-30% remaining - normal for HTML-heavy content
+        logger.info(
+            f"Significant HTML removed: {original_length} -> {cleaned_length} chars ({reduction_pct:.0f}% reduced) "
+            f"for '{title[:50]}...'"
+        )
+    elif reduction_pct > 50:  # More than 50% reduced but still reasonable content
+        logger.debug(
+            f"Content cleaned: {original_length} -> {cleaned_length} chars ({reduction_pct:.0f}% reduced) "
+            f"for '{title[:50]}...'"
+        )
+
+    return content
 
 
 @dataclass
@@ -137,8 +352,15 @@ class EnhancedGLPIIngestion:
         logger.info(f"Chunking Strategy: {chunk_strategy.value}")
         
         # Initialize services with dependency injection
-        self.glpi_service = GLPIService()
-        self.embedding_service = EmbeddingService(model_name=self.embedding_model)
+        self.glpi_service = GLPIClient(
+            host=settings.glpi_db_host,
+            port=settings.glpi_db_port,
+            database=settings.glpi_db_name,
+            user=settings.glpi_db_user,
+            password=settings.glpi_db_password,
+            table_prefix=settings.glpi_db_prefix
+        )
+        self.embedding_service = SentenceTransformerAdapter(model_name=self.embedding_model)
         
         # Initialize Qdrant with correct dimensions
         self.qdrant = QdrantAdapter(
@@ -189,8 +411,31 @@ class EnhancedGLPIIngestion:
         
         # Classify department using domain classifier
         sample_text = f"{title} {category} {content}"
-        departments = self.domain_classifier.classify(sample_text, top_n=2)
-        primary_dept = departments[0] if departments else Department.GERAL
+        department_strings = self.domain_classifier.classify(sample_text)
+
+        # Convert string department names to Department enum
+        departments = []
+        for dept_str in department_strings:
+            try:
+                # Try to match the department string to the enum
+                if dept_str == "TI":
+                    departments.append(Department.TI)
+                elif dept_str == "RH":
+                    departments.append(Department.RH)
+                elif dept_str in ["Financeiro", "FINANCEIRO"]:
+                    departments.append(Department.FINANCEIRO)
+                elif dept_str in ["Loteamento", "LOTEAMENTO"]:
+                    departments.append(Department.LOTEAMENTO)
+                elif dept_str == "Geral":
+                    departments.append(Department.GERAL)
+            except:
+                continue
+
+        # If no departments matched, use GERAL
+        if not departments:
+            departments = [Department.GERAL]
+
+        primary_dept = departments[0]
         
         # Determine document type
         doc_type = DocType.FAQ if glpi_meta.get("is_faq") else DocType.ARTICLE
@@ -302,22 +547,29 @@ class EnhancedGLPIIngestion:
     def _process_article(self, article: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Process a single article into indexed chunks.
-        
+
         Args:
             article: GLPI article dict
-            
+
         Returns:
             List of successfully indexed chunk IDs
         """
         title = article.get("title", "Sem título")
         content = article.get("content", "")
-        
+
+        # Clean content (decode base64, remove HTML, normalize)
+        content = clean_glpi_content(content, title)
+
         if not content or len(content.strip()) < settings.glpi_min_content_length:
-            logger.warning(f"Article '{title}' too short, skipping")
+            logger.warning(f"Article '{title}' too short after cleaning, skipping")
             return []
-        
+
+        # Update article with cleaned content for classification
+        article_cleaned = article.copy()
+        article_cleaned["content"] = content
+
         # Classify and build metadata
-        doc_metadata = self._classify_article(article)
+        doc_metadata = self._classify_article(article_cleaned)
         
         # Intelligent chunking
         chunks = self.chunker.chunk_document(
@@ -486,12 +738,17 @@ class EnhancedGLPIIngestion:
             
             try:
                 logger.info(f"[{idx}/{len(articles)}] Processing: {title[:60]}...")
-                
+
                 if dry_run:
                     # Just process without indexing
-                    doc_metadata = self._classify_article(article)
+                    # Clean content first
+                    content = clean_glpi_content(article.get("content", ""), title)
+                    article_cleaned = article.copy()
+                    article_cleaned["content"] = content
+
+                    doc_metadata = self._classify_article(article_cleaned)
                     chunks = self.chunker.chunk_document(
-                        text=article.get("content", ""),
+                        text=content,
                         title=title,
                         metadata=asdict(doc_metadata)
                     )

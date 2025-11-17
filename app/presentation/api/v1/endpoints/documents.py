@@ -1,4 +1,6 @@
 import logging
+import os
+from pathlib import Path
 from typing import Dict, Any, List
 
 from fastapi import (
@@ -22,6 +24,123 @@ from app.infrastructure.adapters.vector_store.qdrant_adapter import QdrantAdapte
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Constantes de segurança para upload de arquivos
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+MAX_FILENAME_LENGTH = 255
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitiza nome de arquivo para prevenir path traversal e outros ataques.
+
+    Args:
+        filename: Nome do arquivo original
+
+    Returns:
+        Nome de arquivo sanitizado e seguro
+    """
+    if not filename:
+        return "unnamed_file"
+
+    # Usar apenas o basename (remove qualquer path)
+    safe_name = os.path.basename(filename)
+
+    # Remover caracteres perigosos
+    safe_name = "".join(c for c in safe_name if c.isalnum() or c in "._- ")
+    safe_name = safe_name.strip()
+
+    # Garantir que não começa com ponto (arquivos ocultos)
+    if safe_name.startswith('.'):
+        safe_name = 'file' + safe_name
+
+    # Limitar tamanho
+    if len(safe_name) > MAX_FILENAME_LENGTH:
+        name_part, ext_part = os.path.splitext(safe_name)
+        safe_name = name_part[:MAX_FILENAME_LENGTH - len(ext_part)] + ext_part
+
+    # Se ficou vazio após sanitização, usar nome padrão
+    if not safe_name or safe_name == '.':
+        safe_name = "unnamed_file"
+
+    return safe_name
+
+
+def validate_file_extension(filename: str) -> str:
+    """
+    Valida e extrai extensão do arquivo.
+
+    Args:
+        filename: Nome do arquivo
+
+    Returns:
+        Extensão do arquivo em lowercase com ponto (ex: '.pdf')
+
+    Raises:
+        HTTPException: Se extensão for inválida ou não suportada
+    """
+    if not filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nome de arquivo não fornecido"
+        )
+
+    # Usar pathlib para extrair extensão de forma segura
+    file_path = Path(filename)
+    file_ext = file_path.suffix.lower()
+
+    if not file_ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arquivo sem extensão. Extensões permitidas: " + ", ".join(ALLOWED_EXTENSIONS)
+        )
+
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tipo de arquivo não suportado: {file_ext}. Permitidos: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+
+    return file_ext
+
+
+async def validate_file_size(file: UploadFile) -> bytes:
+    """
+    Valida tamanho do arquivo e retorna conteúdo.
+
+    Args:
+        file: Arquivo enviado
+
+    Returns:
+        Conteúdo do arquivo em bytes
+
+    Raises:
+        HTTPException: Se arquivo for muito grande
+    """
+    # Ler arquivo em chunks para não carregar tudo na memória de uma vez
+    content_chunks = []
+    total_size = 0
+
+    chunk_size = 1024 * 1024  # 1MB chunks
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+
+        total_size += len(chunk)
+
+        if total_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Arquivo muito grande. Tamanho máximo: {MAX_FILE_SIZE // (1024*1024)}MB"
+            )
+
+        content_chunks.append(chunk)
+
+    return b''.join(content_chunks)
+
 
 @router.post(
     "/ingest",
@@ -125,25 +244,20 @@ async def upload_file(
     current_admin: Dict[str, Any] = Depends(get_current_admin_user),
 ) -> Dict[str, Any]:
     try:
+        # Sanitizar nome do arquivo
+        safe_filename = sanitize_filename(file.filename or "")
+
         logger.info(
-            f"Upload de arquivo: filename={file.filename}, "
+            f"Upload de arquivo: filename={safe_filename}, "
             f"content_type={file.content_type}, "
             f"admin_user={current_admin['username']}"
         )
-        
-        allowed_extensions = {".txt", ".md", ".pdf"}
-        file_ext = None
-        
-        if file.filename:
-            file_ext = "." + file.filename.rsplit(".", 1)[-1].lower()
-        
-        if not file_ext or file_ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Tipo de arquivo não suportado. Use: {', '.join(allowed_extensions)}",
-            )
-        
-        content_bytes = await file.read()
+
+        # Validar extensão do arquivo
+        file_ext = validate_file_extension(safe_filename)
+
+        # Validar tamanho e ler conteúdo
+        content_bytes = await validate_file_size(file)
         
         if file_ext in {".txt", ".md"}:
             try:
@@ -210,19 +324,20 @@ async def upload_file(
             "category": category,
             "origin": "file_upload",
             "uploaded_by": current_admin["username"],
-            "original_filename": file.filename,
+            "original_filename": safe_filename,
             "file_type": file_ext,
         }
-        
+
         if department:
             metadata["department"] = department
-        
+
         if tags:
             tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
             if tags_list:
                 metadata["tags"] = tags_list
-        
-        title = file.filename.rsplit(".", 1)[0] if file.filename else "Documento sem título"
+
+        # Extrair título do nome do arquivo (sem extensão)
+        title = Path(safe_filename).stem if safe_filename else "Documento sem título"
         
         result = ingest_uc.execute(
             title=title,
@@ -238,12 +353,12 @@ async def upload_file(
         
         logger.info(
             f"Arquivo processado: {result['chunks_processed']} chunks, "
-            f"filename={file.filename}"
+            f"filename={safe_filename}"
         )
-        
+
         return {
             "message": result["message"],
-            "filename": file.filename,
+            "filename": safe_filename,
             "chunks_processed": result["chunks_processed"],
             "chunks_failed": result.get("chunks_failed", 0),
             "document_ids": result.get("document_ids", []),

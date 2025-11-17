@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import List, Dict, Any, Optional
 import pymysql
 from contextlib import contextmanager
@@ -15,6 +16,13 @@ class GLPIClient:
         password: str = "",
         table_prefix: str = "glpi_",
     ):
+        # Validar table_prefix para prevenir SQL injection
+        if not re.match(r'^[a-z0-9_]+$', table_prefix):
+            raise ValueError(
+                f"Invalid table_prefix '{table_prefix}'. "
+                "Only lowercase letters, numbers, and underscores allowed."
+            )
+
         self.config = {
             "host": host,
             "port": port,
@@ -25,12 +33,12 @@ class GLPIClient:
             "cursorclass": pymysql.cursors.DictCursor,
         }
         self.table_prefix = table_prefix
-        
+
         try:
             with self._get_connection() as conn:
-                logger.info(f"GLPIClient conectado: {host}:{port}/{database}")
+                logger.info(f"GLPIClient conectado ao database: {database}")
         except Exception as e:
-            logger.error(f"Erro ao conectar ao GLPI: {e}")
+            logger.error(f"Erro ao conectar ao GLPI")
             raise
     
     @contextmanager
@@ -48,9 +56,9 @@ class GLPIClient:
     ) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cur = conn.cursor()
-            
+
             query = f"""
-                SELECT 
+                SELECT
                     kb.id,
                     kb.name as title,
                     kb.answer as content,
@@ -60,21 +68,23 @@ class GLPIClient:
                     kb.view as view_count,
                     kbt.language
                 FROM {self.table_prefix}knowbaseitems kb
-                LEFT JOIN {self.table_prefix}knowbaseitemtranslations kbt 
+                LEFT JOIN {self.table_prefix}knowbaseitemtranslations kbt
                     ON kb.id = kbt.knowbaseitems_id
                 WHERE kb.is_faq = 0
                     AND LENGTH(kb.answer) >= %s
                 ORDER BY kb.date_mod DESC
             """
-            
+
+            params = [min_content_length]
             if limit:
-                query += f" LIMIT {limit}"
-            
-            cur.execute(query, (min_content_length,))
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, tuple(params))
             articles = cur.fetchall()
-            
+
             logger.info(f"Buscados {len(articles)} artigos do GLPI")
-            
+
             return articles
     
     def fetch_faq_items(
@@ -84,9 +94,9 @@ class GLPIClient:
     ) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cur = conn.cursor()
-            
+
             query = f"""
-                SELECT 
+                SELECT
                     kb.id,
                     kb.name as title,
                     kb.answer as content,
@@ -99,17 +109,81 @@ class GLPIClient:
                     AND LENGTH(kb.answer) >= %s
                 ORDER BY kb.view DESC, kb.date_mod DESC
             """
-            
+
+            params = [min_content_length]
             if limit:
-                query += f" LIMIT {limit}"
-            
-            cur.execute(query, (min_content_length,))
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, tuple(params))
             faqs = cur.fetchall()
-            
+
             logger.info(f"Buscados {len(faqs)} FAQs do GLPI")
-            
+
             return faqs
-    
+
+    def get_all_articles(
+        self,
+        include_private: bool = False,
+        min_content_length: int = 50,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all articles (knowledge base + FAQs) from GLPI.
+
+        Args:
+            include_private: Whether to include private articles (currently not used)
+            min_content_length: Minimum content length
+            limit: Maximum number of articles to return
+
+        Returns:
+            List of articles with enriched metadata
+        """
+        # Fetch both knowledge base articles and FAQs
+        kb_articles = self.fetch_knowledge_base_articles(
+            limit=None,  # We'll limit after combining
+            min_content_length=min_content_length
+        )
+
+        faq_items = self.fetch_faq_items(
+            limit=None,
+            min_content_length=min_content_length
+        )
+
+        # Enrich articles with metadata
+        all_articles = []
+
+        for article in kb_articles:
+            article['metadata'] = {
+                'is_faq': False,
+                'date_creation': article.get('date_creation'),
+                'date_mod': article.get('date_mod'),
+                'author': article.get('author_id'),
+                'visibility': 'public',  # Assuming public for now
+            }
+            all_articles.append(article)
+
+        for faq in faq_items:
+            faq['metadata'] = {
+                'is_faq': True,
+                'date_creation': faq.get('date_creation'),
+                'date_mod': faq.get('date_mod'),
+                'author': faq.get('author_id'),
+                'visibility': 'public',
+            }
+            all_articles.append(faq)
+
+        # Sort by modification date (most recent first)
+        all_articles.sort(key=lambda x: x.get('date_mod', ''), reverse=True)
+
+        # Apply limit if specified
+        if limit:
+            all_articles = all_articles[:limit]
+
+        logger.info(f"Total articles retrieved: {len(all_articles)} (KB: {len(kb_articles)}, FAQ: {len(faq_items)})")
+
+        return all_articles
+
     def fetch_tickets_for_training(
         self,
         limit: Optional[int] = None,
@@ -117,14 +191,14 @@ class GLPIClient:
     ) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             cur = conn.cursor()
-            
+
             if status is None:
                 status = [5, 6]
-            
+
             status_placeholders = ",".join(["%s"] * len(status))
-            
+
             query = f"""
-                SELECT 
+                SELECT
                     t.id,
                     t.name as title,
                     t.content as description,
@@ -137,24 +211,26 @@ class GLPIClient:
                     t.priority,
                     c.name as category
                 FROM {self.table_prefix}tickets t
-                LEFT JOIN {self.table_prefix}ticketsolutions ts 
+                LEFT JOIN {self.table_prefix}ticketsolutions ts
                     ON t.id = ts.tickets_id
-                LEFT JOIN {self.table_prefix}itilcategories c 
+                LEFT JOIN {self.table_prefix}itilcategories c
                     ON t.itilcategories_id = c.id
                 WHERE t.status IN ({status_placeholders})
                     AND ts.content IS NOT NULL
                     AND LENGTH(ts.content) >= 50
                 ORDER BY t.solvedate DESC
             """
-            
+
+            params = list(status)
             if limit:
-                query += f" LIMIT {limit}"
-            
-            cur.execute(query, status)
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, tuple(params))
             tickets = cur.fetchall()
-            
+
             logger.info(f"Buscados {len(tickets)} tickets resolvidos do GLPI")
-            
+
             return tickets
     
     def fetch_categories(self) -> List[Dict[str, Any]]:

@@ -2,7 +2,7 @@ import logging
 from datetime import timedelta
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from app.presentation.models.auth_models import (
     LoginRequest,
@@ -39,12 +39,14 @@ router = APIRouter()
     responses={
         201: {"description": "Usuário criado com sucesso"},
         400: {"description": "Dados inválidos ou usuário já existe"},
+        429: {"description": "Muitas requisições - limite: 5/minuto"},
     },
 )
 async def register(
     request: RegisterRequest,
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
 ) -> UserResponse:
+    # NOTA: Rate limiting de 5/minute aplicado via decorator no main.py (default 50/min aqui)
     try:
         logger.info(f"Tentativa de registro: username={request.username}, email={request.email}")
         
