@@ -9,6 +9,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.infrastructure.config.settings import get_settings
 from app.presentation.api.v1.router import api_router
+from app.presentation.api.middleware.logging_middleware import LoggingMiddleware
+from app.presentation.api.health import health_router
 
 from app.presentation.api.middleware import (
     SecurityHeadersMiddleware,
@@ -100,6 +102,10 @@ def _configure_rate_limiting(app: FastAPI) -> None:
     logger.info("  → Other endpoints: 50/minute (default)")
 
 def _configure_middleware(app: FastAPI) -> None:
+    from app.presentation.api.dependencies import get_structured_logger
+    app.add_middleware(LoggingMiddleware, logger=get_structured_logger())
+    logger.info("✓ Structured logging middleware configured")
+    
     origins = (
         settings.cors_origins.split(",")
         if settings.cors_origins != "*"
@@ -153,6 +159,8 @@ def _configure_exception_handlers(app: FastAPI) -> None:
 
 def _configure_routers(app: FastAPI) -> None:
     app.include_router(api_router, prefix="/api/v1")
+    app.include_router(health_router, tags=["Health"])
+    logger.info("✓ Health check router configured")
     logger.info("✓ API routers configured under /api/v1")
 
 def _add_utility_endpoints(app: FastAPI) -> None:

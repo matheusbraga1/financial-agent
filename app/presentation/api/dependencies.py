@@ -2,6 +2,12 @@ from typing import Optional
 from functools import lru_cache
 import logging
 
+import redis.asyncio as redis
+
+from app.infrastructure.cache import CacheService
+from app.infrastructure.logging import StructuredLogger
+from app.infrastructure.security import JWTHandler
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -36,6 +42,66 @@ from app.application.use_cases.documents.ingest_document_use_case import IngestD
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
+
+@lru_cache()
+def get_redis_client() -> redis.Redis:
+    """Cria cliente Redis singleton"""
+    settings = get_settings()
+
+    logger.info(
+        f"Inicializando Redis client: {settings.redis_host}:{settings.redis_port}"
+    )
+
+    return redis.Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        db=settings.redis_db,
+        password=settings.redis_password if settings.redis_password else None,
+        ssl=settings.redis_ssl,
+        max_connections=settings.redis_max_connections,
+        decode_responses=False,  # Para suportar pickle
+    )
+
+@lru_cache()
+def get_cache_service() -> CacheService:
+    """Cria serviço de cache singleton"""
+    settings = get_settings()
+    redis_client = get_redis_client()
+
+    logger.info("Inicializando CacheService")
+
+    return CacheService(
+        redis_client=redis_client,
+        default_ttl=settings.cache_default_ttl,
+        prefix="financial_agent"
+    )
+
+@lru_cache()
+def get_structured_logger() -> StructuredLogger:
+    """Cria logger estruturado singleton"""
+    settings = get_settings()
+
+    return StructuredLogger(
+        name="financial_agent",
+        level=settings.log_level,
+        log_format=settings.log_format
+    )
+
+@lru_cache()
+def get_jwt_handler() -> JWTHandler:
+    """Cria JWT handler singleton"""
+    settings = get_settings()
+    redis_client = get_redis_client()
+
+    logger.info("Inicializando JWTHandler")
+
+    return JWTHandler(
+        secret_key=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        access_token_expire_minutes=settings.access_token_expire_minutes,
+        refresh_token_expire_days=settings.refresh_token_expire_days,
+        redis_client=redis_client
+    )
 
 @lru_cache()
 def get_embeddings_adapter() -> SentenceTransformerAdapter:
