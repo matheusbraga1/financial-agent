@@ -2,11 +2,12 @@ import sys
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import logging
 import argparse
 from dataclasses import dataclass, asdict
 import json
+import unicodedata
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -63,8 +64,60 @@ class IngestionStats:
 
 class EnhancedGLPIIngestion:
     """Enhanced GLPI ingestion with intelligent chunking and proper embeddings."""
-    
-    def __init__(self, 
+
+    @staticmethod
+    def _sanitize_payload_value(value: Any) -> Any:
+        """
+        Recursively sanitize payload values to ensure they are JSON-safe.
+
+        This handles:
+        - Unicode normalization for strings
+        - Encoding validation
+        - Nested dictionaries and lists
+        - Special characters that might cause issues
+
+        Args:
+            value: Any value to sanitize
+
+        Returns:
+            Sanitized value safe for JSON serialization and Qdrant storage
+        """
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            # Normalize Unicode to NFC
+            value = unicodedata.normalize('NFC', value)
+
+            # Ensure valid UTF-8 encoding
+            try:
+                value = value.encode('utf-8', errors='ignore').decode('utf-8')
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                logger.warning(f"Failed to encode string, using ASCII: {value[:50]}...")
+                value = value.encode('ascii', errors='ignore').decode('ascii')
+
+            return value
+
+        elif isinstance(value, dict):
+            # Recursively sanitize dictionary values
+            return {key: EnhancedGLPIIngestion._sanitize_payload_value(val)
+                    for key, val in value.items()}
+
+        elif isinstance(value, (list, tuple)):
+            # Recursively sanitize list items
+            return [EnhancedGLPIIngestion._sanitize_payload_value(item)
+                    for item in value]
+
+        elif isinstance(value, (int, float, bool)):
+            # These types are safe as-is
+            return value
+
+        else:
+            # Convert other types to string and sanitize
+            str_value = str(value)
+            return EnhancedGLPIIngestion._sanitize_payload_value(str_value)
+
+    def __init__(self,
                  embedding_model: Optional[str] = None,
                  chunk_strategy: ChunkingStrategy = ChunkingStrategy.SEMANTIC):
         """
@@ -325,7 +378,8 @@ class EnhancedGLPIIngestion:
                 
                 # Build search text for BM25
                 search_text = f"{title} {title} {title} {chunk.text}"
-                
+
+                # Build payload with all relevant data
                 payload = {
                     "title": document.title,
                     "category": document.category,
@@ -337,7 +391,11 @@ class EnhancedGLPIIngestion:
                     "doc_type": doc_metadata.doc_type.value,
                     "tags": doc_metadata.tags,
                 }
-                
+
+                # Sanitize payload to ensure all strings are properly encoded
+                # This prevents issues with special characters in Qdrant/JSON
+                payload = self._sanitize_payload_value(payload)
+
                 # Store in Qdrant
                 self.qdrant.upsert_point(
                     point_id=doc_id,

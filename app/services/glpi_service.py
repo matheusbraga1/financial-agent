@@ -3,6 +3,7 @@ from sqlalchemy.engine import Engine
 from typing import List, Dict, Any, Optional
 import logging
 import re
+import unicodedata
 from html import unescape
 
 from app.core.config import get_settings
@@ -101,12 +102,16 @@ class GLPIService:
                     skipped += 1
                     continue
 
+                # Sanitize title and category to handle special characters
+                title = self._sanitize_text(article_dict.get("title") or "Sem título")
+                category = self._sanitize_text(article_dict.get("category") or "Geral")
+
                 articles.append(
                     {
                         "id": str(article_dict["id"]),
-                        "title": article_dict.get("title") or "Sem título",
+                        "title": title,
                         "content": clean_content,
-                        "category": article_dict.get("category") or "Geral",
+                        "category": category,
                         "metadata": {
                             "glpi_id": article_dict["id"],
                             "category_id": article_dict.get("category_id"),
@@ -147,11 +152,17 @@ class GLPIService:
                 if not row:
                     return None
                 data = dict(row._mapping)
+
+                # Sanitize all text fields
+                title = self._sanitize_text(data.get("title") or "Sem título")
+                content = self._clean_html(data.get("content") or "")
+                category = self._sanitize_text(data.get("category") or "Geral")
+
                 return {
                     "id": str(data["id"]),
-                    "title": data.get("title") or "Sem título",
-                    "content": self._clean_html(data.get("content") or ""),
-                    "category": data.get("category") or "Geral",
+                    "title": title,
+                    "content": content,
+                    "category": category,
                 }
         except Exception as e:
             logger.error(f"Erro ao buscar artigo {article_id}: {e}")
@@ -202,6 +213,53 @@ class GLPIService:
             return {}
 
     @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """
+        Sanitize text to handle special characters properly.
+
+        This method:
+        - Normalizes Unicode characters to NFC form (composed)
+        - Removes control characters except newlines, tabs, and carriage returns
+        - Ensures text is properly encoded as UTF-8
+
+        Args:
+            text: Raw text to sanitize
+
+        Returns:
+            Sanitized text safe for processing and storage
+        """
+        if not text:
+            return ""
+
+        # Normalize Unicode to NFC (Canonical Composition)
+        # This ensures consistent representation of characters with diacritics
+        # E.g., ã is stored as a single character, not a + combining tilde
+        text = unicodedata.normalize('NFC', text)
+
+        # Remove control characters except newline (\n), tab (\t), and carriage return (\r)
+        # Control characters can cause issues in JSON and databases
+        sanitized_chars = []
+        for char in text:
+            category = unicodedata.category(char)
+            # Keep character if it's not a control character (category C*)
+            # OR if it's a newline, tab, or carriage return
+            if category[0] != 'C' or char in '\n\t\r':
+                sanitized_chars.append(char)
+
+        text = ''.join(sanitized_chars)
+
+        # Ensure text is valid UTF-8 by encoding and decoding
+        # This catches any remaining problematic characters
+        try:
+            text = text.encode('utf-8', errors='ignore').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            logger.warning(f"Unicode encoding issue during sanitization: {e}")
+            # Fallback: aggressively remove non-ASCII if there's still an issue
+            text = text.encode('ascii', errors='ignore').decode('ascii')
+
+        return text
+
+    @staticmethod
     def _clean_html(html_content: str) -> str:
         if not html_content:
             return ""
@@ -209,6 +267,7 @@ class GLPIService:
         try:
             from bs4 import BeautifulSoup
 
+            # Unescape HTML entities once before parsing
             soup = BeautifulSoup(unescape(html_content), "html.parser")
 
             for tag in soup(["script", "style", "meta", "link"]):
@@ -239,17 +298,22 @@ class GLPIService:
 
         except Exception:
             logger.debug("BeautifulSoup não disponível, usando limpeza básica")
+            # Unescape HTML entities once
             text = unescape(html_content)
             text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
             text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
             text = re.sub(r"<li>", "\n- ", text, flags=re.IGNORECASE)
             text = re.sub(r"<[^>]+>", "", text)
 
-        text = unescape(text)
+        # Normalize whitespace and line breaks
         text = re.sub(r" +", " ", text)
         text = re.sub(r"\n\n\n+", "\n\n", text)
         text = re.sub(r"\n ", "\n", text)
-        return text.strip()
+        text = text.strip()
+
+        # Apply sanitization to handle special characters properly
+        # This must be the last step to ensure all text is properly normalized
+        return GLPIService._sanitize_text(text)
 
     def test_connection(self) -> bool:
         try:

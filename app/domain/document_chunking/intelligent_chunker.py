@@ -1,5 +1,6 @@
 import re
 import logging
+import unicodedata
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -395,10 +396,46 @@ class IntelligentChunker:
         return min(1.0, max(0.0, score))
     
     def _normalize_text(self, text: str) -> str:
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
+        """
+        Normalize text for consistent processing.
+
+        This method:
+        - Normalizes Unicode characters to NFC form (composed)
+        - Standardizes whitespace
+        - Standardizes line endings
+        - Removes control characters except newlines and tabs
+
+        Args:
+            text: Raw text to normalize
+
+        Returns:
+            Normalized text
+        """
+        if not text:
+            return ""
+
+        # Normalize Unicode to NFC (Canonical Composition)
+        # Ensures consistent representation of accented characters
+        text = unicodedata.normalize('NFC', text)
+
+        # Remove control characters except newline and tab
+        # Control characters can cause issues during chunking
+        normalized_chars = []
+        for char in text:
+            category = unicodedata.category(char)
+            # Keep non-control characters or newlines/tabs
+            if category[0] != 'C' or char in '\n\t\r':
+                normalized_chars.append(char)
+
+        text = ''.join(normalized_chars)
+
+        # Standardize line endings to Unix style
         text = text.replace('\r\n', '\n')
         text = text.replace('\r', '\n')
-        
+
+        # Normalize whitespace (but preserve single newlines)
+        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces/tabs to single space
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple newlines to double
+        text = re.sub(r' *\n *', '\n', text)  # Remove spaces around newlines
+
         return text.strip()
