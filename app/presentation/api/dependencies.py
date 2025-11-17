@@ -276,12 +276,11 @@ def get_memory_manager(
 @lru_cache()
 def get_document_processor() -> DocumentProcessor:
     settings = get_settings()
-    
+
     logger.debug("Criando DocumentProcessor")
     return DocumentProcessor(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
-        min_chunk_size=settings.min_chunk_size,
     )
 
 def get_generate_answer_use_case(
