@@ -122,8 +122,8 @@ class ManageConversationUseCase:
             return False
     
     def get_user_sessions(
-        self, 
-        user_id: str, 
+        self,
+        user_id: str,
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         try:
@@ -134,6 +134,51 @@ class ManageConversationUseCase:
         except Exception as e:
             logger.error(f"Erro ao listar sessões: {e}")
             return []
+
+    def list_sessions(
+        self,
+        user_id: str,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Lista sessões do usuário com paginação.
+
+        Args:
+            user_id: ID do usuário
+            limit: Número máximo de sessões a retornar
+            offset: Offset para paginação
+
+        Returns:
+            Dicionário com sessions (lista), total, limit, offset e has_more
+        """
+        try:
+            sessions = self.conversations.get_user_sessions(
+                user_id=user_id,
+                limit=limit,
+                offset=offset
+            )
+
+            total = self.conversations.get_user_sessions_count(user_id=user_id)
+
+            has_more = (offset + len(sessions)) < total
+
+            return {
+                "sessions": sessions,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more
+            }
+        except Exception as e:
+            logger.error(f"Erro ao listar sessões: {e}")
+            return {
+                "sessions": [],
+                "total": 0,
+                "limit": limit,
+                "offset": offset,
+                "has_more": False
+            }
     
     def delete_session(self, session_id: str, user_id: str) -> bool:
         try:

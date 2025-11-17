@@ -216,7 +216,12 @@ class SQLiteConversationRepository:
             conn.commit()
             return cur.lastrowid
     
-    def get_user_sessions(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_user_sessions(
+        self,
+        user_id: str,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -238,12 +243,27 @@ class SQLiteConversationRepository:
                 WHERE c.user_id = ? AND c.user_id IS NOT NULL AND c.user_id != ''
                 GROUP BY c.session_id, c.user_id, c.created_at
                 ORDER BY c.created_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (user_id, limit),
+                (user_id, limit, offset),
             )
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
+    def get_user_sessions_count(self, user_id: str) -> int:
+        """Retorna o total de sessões do usuário."""
+        with self._lock, self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT c.session_id) as count
+                FROM conversations c
+                WHERE c.user_id = ? AND c.user_id IS NOT NULL AND c.user_id != ''
+                """,
+                (user_id,),
+            )
+            row = cur.fetchone()
+            return row["count"] if row else 0
     
     def delete_session(self, session_id: str) -> bool:
         with self._lock, self._connect() as conn:
