@@ -84,8 +84,8 @@ async def chat(
         cache_key = None
         if not current_user:
             cache_key = f"chat:{hashlib.md5(request.question.lower().strip().encode()).hexdigest()}"
-            cached_response = cache_service.get(cache_key)
-            
+            cached_response = await cache_service.get(cache_key)
+
             if cached_response:
                 structured_logger.info(
                     "Resposta recuperada do cache",
@@ -141,7 +141,7 @@ async def chat(
         else:
             # Cachear resposta para queries anônimas
             try:
-                cache_service.set(
+                await cache_service.set(
                     cache_key,
                     response.dict(),
                     ttl=1800  # 30 minutos
@@ -229,8 +229,8 @@ async def chat_stream(
             cache_key = None
             if not current_user:
                 cache_key = f"chat_stream:{hashlib.md5(request.question.lower().strip().encode()).hexdigest()}"
-                cached_response = cache_service.get(cache_key)
-                
+                cached_response = await cache_service.get(cache_key)
+
                 if cached_response:
                     structured_logger.info(
                         "Resposta em stream recuperada do cache",
@@ -326,7 +326,7 @@ async def chat_stream(
                         "model_used": model_used,
                         "session_id": session_id,
                     }
-                    cache_service.set(cache_key, cache_data, ttl=1800)
+                    await cache_service.set(cache_key, cache_data, ttl=1800)
                     structured_logger.info(
                         "Resposta em stream armazenada no cache",
                         cache_key=cache_key
@@ -453,13 +453,13 @@ async def get_history(
     summary="Listar sessões do usuário",
 )
 async def list_sessions(
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100, description="Número de sessões por página"),
+    offset: int = Query(0, ge=0, description="Offset para paginação"),
     manage_conversation_uc: ManageConversationUseCase = Depends(get_manage_conversation_use_case),
     current_user: Dict[str, Any] = Depends(get_current_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> SessionsResponse:
-    """Lista todas as sessões do usuário autenticado."""
+    """Lista todas as sessões do usuário autenticado com paginação para scroll infinito."""
     try:
         structured_logger.info(
             "Listando sessões",
@@ -467,24 +467,31 @@ async def list_sessions(
             limit=limit,
             offset=offset
         )
-        
-        sessions = manage_conversation_uc.list_sessions(
+
+        result = manage_conversation_uc.list_sessions(
             user_id=str(current_user["id"]),
             limit=limit,
             offset=offset,
         )
-        
+
         session_infos = [
             SessionInfo(
                 session_id=s["session_id"],
                 created_at=s["created_at"],
                 message_count=s.get("message_count", 0),
+                last_message=s.get("last_message", "Nova conversa"),
             )
-            for s in sessions
+            for s in result["sessions"]
         ]
-        
-        return SessionsResponse(sessions=session_infos)
-        
+
+        return SessionsResponse(
+            sessions=session_infos,
+            total=result["total"],
+            limit=result["limit"],
+            offset=result["offset"],
+            has_more=result["has_more"]
+        )
+
     except Exception as e:
         structured_logger.error("Erro ao listar sessões", error=str(e))
         raise HTTPException(
