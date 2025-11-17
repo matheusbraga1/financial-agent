@@ -1,39 +1,11 @@
-#!/usr/bin/env python3
-"""
-GLPI to Qdrant Ingestion Script (Clean Architecture Version)
-
-This script ingests GLPI knowledge base articles into Qdrant vector database
-following Clean Architecture principles, SOLID principles, and Clean Code practices.
-
-Architecture:
-    - Domain Layer: Business logic and entities
-    - Application Layer: Use cases and orchestration
-    - Infrastructure Layer: External services and adapters
-    - Presentation Layer: CLI interface (this script)
-
-Usage:
-    # Full sync with semantic chunking
-    python scripts/ingest_glpi_clean.py
-
-    # Clear and reimport everything
-    python scripts/ingest_glpi_clean.py --clear
-
-    # Test run without indexing
-    python scripts/ingest_glpi_clean.py --dry-run --max-articles 10
-
-    # Use different chunking strategy
-    python scripts/ingest_glpi_clean.py --strategy hierarchical
-"""
 import sys
 import logging
 import argparse
 from pathlib import Path
 from typing import NoReturn
 
-# Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-# Domain imports
 from app.domain.document_chunking.intelligent_chunker import (
     IntelligentChunker,
     ChunkConfig,
@@ -41,13 +13,11 @@ from app.domain.document_chunking.intelligent_chunker import (
 )
 from app.domain.services.rag.domain_classifier import DomainClassifier
 
-# Infrastructure imports
 from app.infrastructure.adapters.external.glpi_client import GLPIClient
 from app.infrastructure.adapters.vector_store.qdrant_adapter import QdrantAdapter
 from app.infrastructure.adapters.embeddings.sentence_transformer_adapter import SentenceTransformerAdapter
 from app.infrastructure.config.settings import get_settings
 
-# Application imports (our clean architecture modules)
 from glpi_ingestion.content_cleaner import create_content_cleaner
 from glpi_ingestion.article_processor import create_article_processor
 from glpi_ingestion.statistics import create_statistics_tracker
@@ -58,45 +28,37 @@ from glpi_ingestion.orchestrator import (
 
 
 def setup_logging() -> None:
-    """Configure logging for the application."""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    # Suppress noisy logs
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 
 
 def parse_arguments() -> argparse.Namespace:
-    """
-    Parse command-line arguments.
-
-    Returns:
-        Parsed arguments
-    """
     parser = argparse.ArgumentParser(
         description="Enhanced GLPI to Qdrant ingestion with intelligent chunking",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Full sync with semantic chunking (recommended)
-  python scripts/ingest_glpi_clean.py
+            Examples:
+            # Full sync with semantic chunking (recommended)
+            python scripts/ingest_glpi_clean.py
 
-  # Use hierarchical chunking for structured docs
-  python scripts/ingest_glpi_clean.py --strategy hierarchical
+            # Use hierarchical chunking for structured docs
+            python scripts/ingest_glpi_clean.py --strategy hierarchical
 
-  # Clear and reimport everything
-  python scripts/ingest_glpi_clean.py --clear
+            # Clear and reimport everything
+            python scripts/ingest_glpi_clean.py --clear
 
-  # Test run without indexing
-  python scripts/ingest_glpi_clean.py --dry-run --max-articles 10
+            # Test run without indexing
+            python scripts/ingest_glpi_clean.py --dry-run --max-articles 10
 
-  # Sync specific article
-  python scripts/ingest_glpi_clean.py --article-id 123
+            # Sync specific article
+            python scripts/ingest_glpi_clean.py --article-id 123
 
-  # Use specific embedding model
-  python scripts/ingest_glpi_clean.py --embedding-model BGE-M3
+            # Use specific embedding model
+            python scripts/ingest_glpi_clean.py --embedding-model BGE-M3
         """
     )
 
@@ -145,20 +107,6 @@ def create_dependencies(
     embedding_model: str,
     chunking_strategy: ChunkingStrategy
 ):
-    """
-    Create and configure all dependencies.
-
-    This function follows Dependency Injection pattern,
-    creating all required services and injecting them.
-
-    Args:
-        settings: Application settings
-        embedding_model: Name of embedding model
-        chunking_strategy: Chunking strategy to use
-
-    Returns:
-        Tuple of configured services
-    """
     logger = logging.getLogger(__name__)
 
     logger.info("Initializing services...")
@@ -166,7 +114,6 @@ def create_dependencies(
     logger.info(f"  - Embedding Dimension: {settings.embedding_dimension}")
     logger.info(f"  - Chunking Strategy: {chunking_strategy.value}")
 
-    # Infrastructure Layer - External adapters
     glpi_client = GLPIClient(
         host=settings.glpi_db_host,
         port=settings.glpi_db_port,
@@ -185,7 +132,6 @@ def create_dependencies(
         vector_size=settings.embedding_dimension
     )
 
-    # Domain Layer - Business logic services
     classifier = DomainClassifier()
 
     chunk_config = ChunkConfig(
@@ -200,7 +146,6 @@ def create_dependencies(
     )
     chunker = IntelligentChunker(chunk_config)
 
-    # Application Layer - Use case services
     content_cleaner = create_content_cleaner(
         min_content_length=settings.glpi_min_content_length
     )
@@ -236,28 +181,15 @@ def sync_single_article(
     glpi_client: GLPIClient,
     article_processor,
 ) -> bool:
-    """
-    Sync a single article from GLPI.
-
-    Args:
-        article_id: GLPI article ID
-        glpi_client: GLPI client
-        article_processor: Article processor
-
-    Returns:
-        True if successful
-    """
     logger = logging.getLogger(__name__)
     logger.info(f"Syncing single article: {article_id}")
 
     try:
-        # Fetch article from GLPI
         article = glpi_client.get_article_by_id(article_id)
         if not article:
             logger.error(f"Article {article_id} not found in GLPI")
             return False
 
-        # Process and index
         success, num_chunks, _ = article_processor.process_article(
             article=article,
             dry_run=False
@@ -279,21 +211,11 @@ def sync_single_article(
 
 
 def main() -> NoReturn:
-    """
-    Main entry point for the script.
-
-    Follows Clean Code principles:
-    - Single responsibility (just orchestrates)
-    - Clear error handling
-    - Proper exit codes
-    """
-    # Setup
     setup_logging()
     logger = logging.getLogger(__name__)
     args = parse_arguments()
     settings = get_settings()
 
-    # Map strategy string to enum
     strategy_map = {
         "semantic": ChunkingStrategy.SEMANTIC,
         "hierarchical": ChunkingStrategy.HIERARCHICAL,
@@ -301,18 +223,15 @@ def main() -> NoReturn:
     }
     strategy = strategy_map[args.strategy]
 
-    # Determine embedding model
     embedding_model = args.embedding_model or settings.embedding_model
 
     try:
-        # Create dependencies (Dependency Injection)
         orchestrator, glpi_client, article_processor = create_dependencies(
             settings=settings,
             embedding_model=embedding_model,
             chunking_strategy=strategy
         )
 
-        # Handle single article sync
         if args.article_id:
             success = sync_single_article(
                 article_id=args.article_id,
@@ -321,7 +240,6 @@ def main() -> NoReturn:
             )
             sys.exit(0 if success else 1)
 
-        # Full sync - create configuration
         config = IngestionConfig(
             include_private=args.include_private,
             clear_existing=args.clear,
@@ -330,10 +248,8 @@ def main() -> NoReturn:
             min_content_length=settings.glpi_min_content_length
         )
 
-        # Run ingestion
         stats = orchestrator.run(config)
 
-        # Exit with appropriate code based on success rate
         if stats.articles_processed > 0:
             sys.exit(0 if stats.is_successful else 1)
         else:
