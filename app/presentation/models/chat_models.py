@@ -30,6 +30,8 @@ class SourceDocument(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     answer: str = Field(..., description="Resposta gerada")
     sources: List[SourceDocument] = Field(
         default_factory=list,
@@ -48,6 +50,8 @@ class ChatResponse(BaseModel):
 
 
 class ChatHistoryMessage(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     role: str = Field(..., description="user ou assistant")
     message_id: Optional[int] = Field(None, description="ID da mensagem")
     content: Optional[str] = Field(None, description="Conteúdo (user)")
@@ -75,4 +79,7 @@ class SessionInfo(BaseModel):
 
 class SessionsResponse(BaseModel):
     sessions: List[SessionInfo]
-    total: int
+    total: int = Field(..., description="Total de sessões do usuário")
+    limit: int = Field(..., description="Limite de sessões por página")
+    offset: int = Field(..., description="Offset atual da paginação")
+    has_more: bool = Field(..., description="Indica se há mais sessões")
