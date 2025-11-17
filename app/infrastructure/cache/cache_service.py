@@ -1,14 +1,15 @@
 import json
 import hashlib
+import asyncio
 from typing import Optional, Any, Callable
 from functools import wraps
-import redis
+import redis.asyncio as redis
 from datetime import timedelta
 import pickle
 
 class CacheService:
-    """Serviço de cache robusto com Redis"""
-    
+    """Serviço de cache robusto com Redis (async)"""
+
     def __init__(
         self,
         redis_client: redis.Redis,
@@ -18,24 +19,24 @@ class CacheService:
         self.redis = redis_client
         self.default_ttl = default_ttl
         self.prefix = prefix
-    
+
     def _make_key(self, key: str) -> str:
         """Gera chave com namespace"""
         return f"{self.prefix}:{key}"
-    
-    def get(self, key: str) -> Optional[Any]:
+
+    async def get(self, key: str) -> Optional[Any]:
         """Recupera valor do cache"""
         full_key = self._make_key(key)
-        value = self.redis.get(full_key)
-        
+        value = await self.redis.get(full_key)
+
         if value:
             try:
                 return pickle.loads(value)
             except:
                 return json.loads(value)
         return None
-    
-    def set(
+
+    async def set(
         self,
         key: str,
         value: Any,
@@ -44,38 +45,41 @@ class CacheService:
         """Armazena valor no cache"""
         full_key = self._make_key(key)
         ttl = ttl or self.default_ttl
-        
+
         try:
             serialized = pickle.dumps(value)
         except:
             serialized = json.dumps(value)
-        
-        return self.redis.setex(full_key, ttl, serialized)
-    
-    def delete(self, key: str) -> bool:
+
+        return await self.redis.setex(full_key, ttl, serialized)
+
+    async def delete(self, key: str) -> bool:
         """Remove valor do cache"""
         full_key = self._make_key(key)
-        return bool(self.redis.delete(full_key))
-    
-    def clear_pattern(self, pattern: str) -> int:
+        return bool(await self.redis.delete(full_key))
+
+    async def clear_pattern(self, pattern: str) -> int:
         """Limpa cache por padrão"""
         full_pattern = self._make_key(pattern)
-        keys = self.redis.keys(full_pattern)
+        keys = await self.redis.keys(full_pattern)
         if keys:
-            return self.redis.delete(*keys)
+            return await self.redis.delete(*keys)
         return 0
-    
-    def get_or_set(
+
+    async def get_or_set(
         self,
         key: str,
         func: Callable,
         ttl: Optional[int] = None
     ) -> Any:
         """Get com fallback para função"""
-        value = self.get(key)
+        value = await self.get(key)
         if value is None:
-            value = func()
-            self.set(key, value, ttl)
+            if asyncio.iscoroutinefunction(func):
+                value = await func()
+            else:
+                value = func()
+            await self.set(key, value, ttl)
         return value
 
 def cache(
