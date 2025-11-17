@@ -63,6 +63,11 @@ class VectorStoreService:
         """Get collection name from adapter."""
         return self.qdrant.collection_name
 
+    @property
+    def client(self):
+        """Get underlying Qdrant client for direct operations."""
+        return self.qdrant.client
+
     def _ensure_collection(self) -> None:
         """Ensure collection exists (delegates to adapter)."""
         self.qdrant.ensure_collection()

@@ -36,12 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.domain.documents.metadata_schema import DocumentMetadata, Department, DocType
 from app.domain.services.documents.document_processor import DocumentProcessor
-from app.services.embedding_service import get_embedding_service_instance
-from app.services.vector_store_multidomain import vector_store_multidomain as vector_store_service_extended
+from app.services.embedding_service import EmbeddingService
+from app.services.vector_store_service import VectorStoreService
 from app.infrastructure.config.settings import get_settings
-
-# Get service instances
-embedding_service = get_embedding_service_instance()
 
 # Setup logging
 logging.basicConfig(
@@ -70,8 +67,9 @@ class DocumentIngester:
         """
         self.documents_dir = documents_dir
         self.processor = DocumentProcessor(chunk_size, chunk_overlap)
-        self.embedding_service = embedding_service
-        self.vector_store = vector_store_service_extended
+        # Direct instantiation - Dependency Injection
+        self.embedding_service = EmbeddingService()
+        self.vector_store = VectorStoreService()
         self.stats = {
             "total_files": 0,
             "processed_files": 0,

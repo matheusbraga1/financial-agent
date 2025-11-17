@@ -1,6 +1,8 @@
 from typing import List, Dict, Any, Optional
 import re
 
+from app.utils.snippet_builder import SnippetBuilder
+
 class AnswerGenerator:
     def build_context(self, documents: List[Dict[str, Any]]) -> str:
         if not documents:
@@ -143,38 +145,24 @@ class AnswerGenerator:
         return text.strip()
     
     def build_snippet(
-        self, 
-        title: str, 
-        content: Optional[str], 
+        self,
+        title: str,
+        content: Optional[str],
         metadata: Dict[str, Any]
     ) -> str:
-        highlights: List[str] = []
-        
-        department = metadata.get("department")
-        if department:
-            highlights.append(f"[{department}]")
-        
-        section = metadata.get("section") or metadata.get("source_section")
-        if section:
-            highlights.append(section)
-        
-        text = (content or "").strip()
-        if text:
-            sentences = [
-                s.strip() 
-                for s in re.split(r'(?<=[.!?])\s+', text) 
-                if s.strip()
-            ]
-            excerpt = ' '.join(sentences[:2]) if sentences else text[:280]
-        else:
-            excerpt = title
-        
-        snippet_body = ' '.join(filter(None, highlights + [excerpt])).strip()
-        
-        if len(snippet_body) > 420:
-            snippet_body = snippet_body[:420].rsplit(' ', 1)[0] + '...'
-        
-        return snippet_body
+        """Constrói snippet formatado do documento.
+
+        Delegado para SnippetBuilder utilitário (evita duplicação).
+
+        Args:
+            title: Título do documento
+            content: Conteúdo do documento
+            metadata: Metadados do documento
+
+        Returns:
+            Snippet formatado
+        """
+        return SnippetBuilder.build(title, content, metadata)
     
     def format_sources(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         sources: List[Dict[str, Any]] = []

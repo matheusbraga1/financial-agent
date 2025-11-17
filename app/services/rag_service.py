@@ -30,13 +30,17 @@ from app.domain.ports import (
     ClarifierPort,
 )
 # Multi-domain components (Clean Architecture - organized by responsibility)
-from app.domain.services.rag.classification import DomainClassifier, ConfidenceScorer
-from app.domain.services.rag.query_processing import QueryExpanderMultidomain, Clarifier
-from app.domain.services.rag.generation import AnswerFormatterWithExamples
+from app.domain.services.rag.domain_classifier import DomainClassifier
+from app.domain.services.rag.confidence_scorer import ConfidenceScorer
+from app.domain.services.rag.query_processor import QueryProcessor
+from app.domain.services.rag.clarifier import Clarifier
+from app.domain.services.rag.answer_generator import AnswerGenerator
 from app.domain.services.rag.reranking import CrossEncoderReranker
 from app.infrastructure.llm.ollama_llm import OllamaLLM
 from app.utils.retry import retry_on_any_error
 from app.utils.text_utils import process_answer_formats
+from app.utils.recency_boost import RecencyBoostCalculator
+from app.utils.snippet_builder import SnippetBuilder
 
 
 logger = logging.getLogger(__name__)
@@ -141,11 +145,11 @@ class RAGService:
         self.history_max_messages = int(os.getenv("CHAT_HISTORY_MAX_MESSAGES", "8"))
 
         # Componentes multi-domain
-        self._expander: QueryExpanderPort = query_expander or QueryExpanderMultidomain()
+        self._expander: QueryExpanderPort = query_expander or QueryProcessor()
         self._retriever: RetrieverPort = retriever or RetrieverMultidomain(
             self.embedding_service, self.vector_store
         )
-        self._fmt: AnswerFormatterPort = formatter or AnswerFormatterWithExamples()
+        self._fmt: AnswerFormatterPort = formatter or AnswerGenerator()
         self._llm: LLMPort = llm or OllamaLLM(self.model)
 
         # Componentes específicos de multi-domain
@@ -271,30 +275,24 @@ class RAGService:
         return normalized
 
     def _build_snippet(self, title: str, content: Optional[str], metadata: Dict[str, Any]) -> str:
-        highlights: List[str] = []
-        department = metadata.get("department")
-        section = metadata.get("section") or metadata.get("source_section")
+        """Constrói snippet formatado do documento.
 
-        if department:
-            highlights.append(f"[{department}]")
-        if section:
-            highlights.append(section)
+        Delegado para SnippetBuilder utilitário (evita duplicação de código).
 
-        text = (content or '').strip()
-        if text:
-            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-            excerpt = ' '.join(sentences[:2]) if sentences else text[:280]
-        else:
-            excerpt = title
+        Args:
+            title: Título do documento
+            content: Conteúdo do documento
+            metadata: Metadados do documento
 
-        snippet_body = ' '.join(filter(None, highlights + [excerpt])).strip()
-        if len(snippet_body) > 420:
-            snippet_body = snippet_body[:420].rsplit(' ', 1)[0] + '...'
-        return snippet_body
+        Returns:
+            str: Snippet formatado
+        """
+        return SnippetBuilder.build(title, content, metadata)
 
     def _apply_recency_boost(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Aplica boost de recência aos documentos baseado na data de modificação.
+        """Aplica boost de recência aos documentos baseado na data de modificação.
+
+        Delegado para RecencyBoostCalculator utilitário (evita duplicação de código).
 
         MELHORIA: Prioriza documentos mais recentes quando há títulos similares.
 
@@ -304,88 +302,21 @@ class RAGService:
         Returns:
             Lista de documentos com scores ajustados, re-ordenada
         """
-        from datetime import datetime, timezone
-
         if not documents or len(documents) < 2:
             return documents
 
-        now = datetime.now(timezone.utc)
-        boosted_docs = []
-
-        for doc in documents:
-            # Extrair data de modificação dos metadados
-            updated_at = None
-            metadata = doc.get("metadata", {})
-
-            # Tentar pegar updated_at
-            if isinstance(metadata, dict):
-                updated_at_str = metadata.get("updated_at") or metadata.get("date_mod")
-                if updated_at_str:
-                    try:
-                        # Tentar parse de diferentes formatos
-                        if isinstance(updated_at_str, str):
-                            # ISO format: 2024-01-15T10:30:00
-                            if 'T' in updated_at_str:
-                                updated_at = datetime.fromisoformat(updated_at_str.replace('Z', '+00:00'))
-                            # MySQL format: 2024-01-15 10:30:00
-                            else:
-                                updated_at = datetime.strptime(updated_at_str, "%Y-%m-%d %H:%M:%S")
-                                updated_at = updated_at.replace(tzinfo=timezone.utc)
-                    except (ValueError, AttributeError) as e:
-                        logger.debug(f"Erro ao parsear data '{updated_at_str}': {e}")
-
-            # Calcular recency score (0.0 a 0.15 boost)
-            recency_boost = 0.0
-            if updated_at:
-                # Dias desde a última modificação
-                days_old = (now - updated_at).days
-
-                # Boost decrescente baseado na idade:
-                # - < 7 dias: +0.15 (muito recente)
-                # - 7-30 dias: +0.10 (recente)
-                # - 30-90 dias: +0.05 (moderado)
-                # - 90-180 dias: +0.02 (antigo)
-                # - > 180 dias: +0.00 (muito antigo)
-
-                if days_old < 7:
-                    recency_boost = 0.15
-                elif days_old < 30:
-                    recency_boost = 0.10
-                elif days_old < 90:
-                    recency_boost = 0.05
-                elif days_old < 180:
-                    recency_boost = 0.02
-                else:
-                    recency_boost = 0.0
-
-                logger.debug(
-                    f"Documento '{doc.get('title', 'unknown')[:50]}': "
-                    f"{days_old} dias antigo, boost={recency_boost:.3f}"
-                )
-
-            # Aplicar boost ao score original
-            original_score = doc.get("score", 0.0)
-            boosted_score = min(1.0, original_score + recency_boost)  # Cap em 1.0
-
-            # Criar cópia do documento com score atualizado
-            boosted_doc = doc.copy()
-            boosted_doc["score"] = boosted_score
-            boosted_doc["original_score"] = original_score  # Preservar score original
-            boosted_doc["recency_boost"] = recency_boost
-
-            boosted_docs.append(boosted_doc)
-
-        # Re-ordenar por score ajustado
-        boosted_docs.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        # Delega para utilitário centralizado
+        boosted_docs = RecencyBoostCalculator.apply_to_documents(documents)
 
         # Log top 3 se houve mudanças significativas
         if any(d.get("recency_boost", 0) > 0.05 for d in boosted_docs[:3]):
             logger.info("Boost de recência aplicado - top 3 documentos:")
             for i, doc in enumerate(boosted_docs[:3]):
+                original_score = doc.get("score", 0.0) - doc.get("recency_boost", 0.0)
                 logger.info(
                     f"  {i+1}. '{doc.get('title', 'unknown')[:50]}' - "
                     f"score: {doc.get('score', 0):.4f} "
-                    f"(original: {doc.get('original_score', 0):.4f}, "
+                    f"(original: {original_score:.4f}, "
                     f"boost: +{doc.get('recency_boost', 0):.3f})"
                 )
 

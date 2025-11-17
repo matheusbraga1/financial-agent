@@ -141,20 +141,3 @@ class ConversationService:
             )
             rows = cur.fetchall()
             return [dict(r) for r in rows]
-
-
-# Singleton removed - use dependency injection via api/deps.py
-# For backward compatibility during migration
-_global_instance = None
-
-
-def get_conversation_service_instance() -> ConversationService:
-    """Get or create global conversation service instance.
-
-    This is a temporary helper for backward compatibility.
-    Prefer using FastAPI dependency injection via api/deps.py
-    """
-    global _global_instance
-    if _global_instance is None:
-        _global_instance = ConversationService()
-    return _global_instance

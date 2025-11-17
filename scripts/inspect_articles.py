@@ -3,16 +3,16 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.vector_store_service import get_vector_store_instance
-from app.services.embedding_service import get_embedding_service_instance
+from app.services.vector_store_service import VectorStoreService
+from app.services.embedding_service import EmbeddingService
 
 
 def search_and_inspect(query: str):
     """Busca e mostra conteúdo completo."""
 
-    # Get service instances
-    embedding_service = get_embedding_service_instance()
-    vector_store_service = get_vector_store_instance()
+    # Direct instantiation - Dependency Injection
+    embedding_service = EmbeddingService()
+    vector_store_service = VectorStoreService()
 
     print("\n" + "=" * 70)
     print(f"BUSCANDO: {query}")

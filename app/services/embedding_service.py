@@ -111,20 +111,3 @@ class EmbeddingService:
         logger.debug(f"Gerando embedding para documento: {title[:50]}...")
         return self.encode_text(combined_text)
 
-
-# Singleton removed - use dependency injection via get_embedding_service() in api/deps.py
-# For backward compatibility during migration, create instance if needed
-_global_instance = None
-
-
-def get_embedding_service_instance() -> EmbeddingService:
-    """Get or create global embedding service instance.
-
-    This is a temporary helper for backward compatibility.
-    Prefer using FastAPI dependency injection via api/deps.py
-    """
-    global _global_instance
-    if _global_instance is None:
-        _global_instance = EmbeddingService()
-    return _global_instance
-
