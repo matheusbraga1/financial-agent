@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 import hashlib
 import uuid
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -75,27 +76,51 @@ class MemoryManager:
         try:
             title = question[:200]
             content = answer
-            
+
             vector = self.embeddings.encode_document(title, content)
-            
-            self.vector_store.upsert(
-                id=memory_id,
+
+            # Preparar payload com todos os metadados necessários
+            payload = {
+                "title": title,
+                "content": content,
+                "search_text": f"{title} {content}",  # Para busca BM25
+                "doc_type": "qa_memory",
+                "department": primary_department or "Geral",
+                "departments": detected_departments or ["Geral"],
+                "tags": ["qa_memory"],
+                "category": primary_department or "QA Memory",
+                "source_ids": [
+                    str(ref.get("id"))
+                    for ref in (source_documents or [])
+                    if ref.get("id")
+                ],
+                "source_titles": [
+                    str(ref.get("title"))
+                    for ref in (source_documents or [])
+                    if ref.get("title")
+                ],
+                "confidence": confidence,
+                "origin": "chat_history",
+                "memory_key": memory_key,
+                "created_at": datetime.utcnow().isoformat(),
+                "usage_count": 0,
+                "helpful_votes": 0,
+            }
+
+            # Usar o método correto do adapter
+            self.vector_store.upsert_point(
+                point_id=memory_id,
                 vector=vector,
-                metadata={
-                    "title": title,
-                    "category": primary_department or "QA Memory",
-                    "content": content,
-                    "metadata": metadata,
-                },
+                payload=payload,
             )
-            
+
             logger.info(
                 f"Memória QA armazenada: '{title[:50]}...' "
                 f"(confidence: {confidence:.2f}, dept: {primary_department})"
             )
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Erro ao armazenar memória QA: {e}", exc_info=True)
             return False
