@@ -276,32 +276,49 @@ async def chat_stream(
                 question=request.question,
                 history=history if current_user else None,
             ):
-                chunk_type = chunk.get("type")
-                
+                # O use case retorna tuplas (tipo, dados)
+                # Converter para formato de dicionário esperado pelo frontend
+                if isinstance(chunk, tuple):
+                    chunk_type, chunk_data = chunk
+                else:
+                    # Fallback para formato de dicionário (caso já esteja no formato correto)
+                    chunk_type = chunk.get("type")
+                    chunk_data = chunk.get("data")
+
+                # Mapear tipos internos para tipos do frontend
                 if chunk_type == "token":
-                    token = chunk.get("data", "")
-                    full_answer += token
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                
+                    full_answer += chunk_data
+                    yield f"data: {json.dumps({'type': 'token', 'data': chunk_data}, ensure_ascii=False)}\n\n"
+
                 elif chunk_type == "sources":
-                    sources = chunk.get("data", [])
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                
-                elif chunk_type == "metadata":
-                    metadata = chunk.get("data", {})
-                    confidence = metadata.get("confidence", 0.0)
-                    model_used = metadata.get("model_used", "unknown")
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                
-                elif chunk_type == "error":
+                    sources = chunk_data if isinstance(chunk_data, list) else []
+                    yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
+
+                elif chunk_type == "confidence":
+                    confidence = float(chunk_data) if chunk_data else 0.0
+                    # Não enviamos confidence separadamente, será enviado com metadata
+
+                elif chunk_type == "_done":
+                    # Enviar metadata antes de done
+                    from app.infrastructure.config.settings import get_settings
+                    settings = get_settings()
+                    model_used = settings.groq_model if settings.llm_provider == "groq" else settings.ollama_model
+
+                    metadata = {
+                        "confidence": confidence,
+                        "model_used": model_used,
+                        "from_cache": False
+                    }
+                    yield f"data: {json.dumps({'type': 'metadata', 'data': metadata}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+                elif chunk_type == "_error":
+                    error_message = str(chunk_data) if chunk_data else "Erro desconhecido"
                     structured_logger.error(
                         "Erro durante streaming",
-                        error=chunk.get("data", {}).get("message")
+                        error=error_message
                     )
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                
-                elif chunk_type == "done":
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'data': {'message': error_message}}, ensure_ascii=False)}\n\n"
             
             # Persistir mensagem do assistente (apenas autenticados)
             if current_user and full_answer:
