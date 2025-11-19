@@ -27,6 +27,7 @@ from app.presentation.api.security import (
     revoke_token,
 )
 from app.infrastructure.config.settings import get_settings
+from app.presentation.api.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -45,30 +46,33 @@ router = APIRouter()
         429: {"description": "Muitas requisições - limite: 5/minuto"},
     },
 )
+@limiter.limit("5/minute")
 async def register(
+    request: Request,
     request_data: RegisterRequest,
     user_repo = Depends(get_user_repository),
-    http_request: Request = None,
 ) -> ApiResponse[UserResponse]:
-    # Apply rate limiting: 5 requests per minute for registration
-    limiter = http_request.app.state.limiter
-    await limiter.check_request_limit(http_request, "5/minute")
+    """
+    Registra novo usuário no sistema.
+
+    Rate limit: 5 requisições por minuto por IP para prevenir spam de registros.
+    """
     try:
         structured_logger = get_structured_logger()
         structured_logger.info(
             "Tentativa de registro",
-            username=request.username,
-            email=request.email
+            username=request_data.username,
+            email=request_data.email
         )
 
-        existing_user = user_repo.get_user_by_username(request.username)
+        existing_user = user_repo.get_user_by_username(request_data.username)
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Username já está em uso",
             )
 
-        existing_email = user_repo.get_user_by_email(request.email)
+        existing_email = user_repo.get_user_by_email(request_data.email)
         if existing_email:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -76,7 +80,7 @@ async def register(
             )
 
         try:
-            hashed_password = hash_password(request.password)
+            hashed_password = hash_password(request_data.password)
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -84,8 +88,8 @@ async def register(
             )
 
         user_id = user_repo.create_user(
-            username=request.username,
-            email=request.email,
+            username=request_data.username,
+            email=request_data.email,
             hashed_password=hashed_password,
             is_active=True,
             is_admin=False,
@@ -102,7 +106,7 @@ async def register(
         structured_logger.info(
             "Usuário registrado com sucesso",
             user_id=user_id,
-            username=request.username
+            username=request_data.username
         )
 
         user_response = UserResponse(
@@ -137,22 +141,30 @@ async def register(
         200: {"description": "Login realizado com sucesso"},
         401: {"description": "Credenciais inválidas"},
         403: {"description": "Usuário inativo"},
+        429: {"description": "Muitas requisições - limite: 5/minuto"},
     },
 )
+@limiter.limit("5/minute")
 async def login(
-    request: LoginRequest,
+    request: Request,
+    login_data: LoginRequest,
     user_repo = Depends(get_user_repository),
 ) -> TokenResponse:
+    """
+    Realiza login no sistema.
+
+    Rate limit: 5 requisições por minuto por IP para proteção contra ataques de força bruta.
+    """
     try:
         structured_logger = get_structured_logger()
-        structured_logger.info("Tentativa de login", username=request.username)
+        structured_logger.info("Tentativa de login", username=login_data.username)
 
-        user = user_repo.get_user_by_username(request.username)
+        user = user_repo.get_user_by_username(login_data.username)
 
         if not user:
             structured_logger.warning(
                 "Login falhou - usuário não encontrado",
-                username=request.username
+                username=login_data.username
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -160,10 +172,10 @@ async def login(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        if not verify_password(request.password, user["hashed_password"]):
+        if not verify_password(login_data.password, user["hashed_password"]):
             structured_logger.warning(
                 "Login falhou - senha incorreta",
-                username=request.username
+                username=login_data.username
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -174,7 +186,7 @@ async def login(
         if not user["is_active"]:
             structured_logger.warning(
                 "Login falhou - usuário inativo",
-                username=request.username
+                username=login_data.username
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -209,7 +221,7 @@ async def login(
         structured_logger.info(
             "Login bem-sucedido",
             user_id=user["id"],
-            username=request.username
+            username=login_data.username
         )
 
         return TokenResponse(
@@ -235,17 +247,25 @@ async def login(
     responses={
         200: {"description": "Token renovado com sucesso"},
         401: {"description": "Refresh token inválido ou expirado"},
+        429: {"description": "Muitas requisições - limite: 10/minuto"},
     },
 )
+@limiter.limit("10/minute")
 async def refresh_token(
-    request: RefreshTokenRequest,
+    request: Request,
+    refresh_data: RefreshTokenRequest,
     user_repo = Depends(get_user_repository),
 ) -> TokenResponse:
+    """
+    Renova o access token usando o refresh token.
+
+    Rate limit: 10 requisições por minuto por IP.
+    """
     try:
         structured_logger = get_structured_logger()
         structured_logger.info("Tentativa de refresh token")
 
-        payload = decode_refresh_token(request.refresh_token)
+        payload = decode_refresh_token(refresh_data.refresh_token)
 
         if not payload:
             raise HTTPException(
@@ -256,7 +276,7 @@ async def refresh_token(
 
         user_id = int(payload["sub"])
 
-        stored_token = user_repo.get_refresh_token(request.refresh_token)
+        stored_token = user_repo.get_refresh_token(refresh_data.refresh_token)
 
         if not stored_token:
             structured_logger.warning(
@@ -296,7 +316,7 @@ async def refresh_token(
         expires_at = datetime.utcnow() + refresh_token_expires
 
         try:
-            user_repo.delete_refresh_token(request.refresh_token)
+            user_repo.delete_refresh_token(refresh_data.refresh_token)
             user_repo.store_refresh_token(
                 user_id=user["id"],
                 token=new_refresh_token,
@@ -304,7 +324,7 @@ async def refresh_token(
             )
         except Exception as e:
             logger.warning(f"Falha ao rotacionar refresh token: {e}")
-            new_refresh_token = request.refresh_token
+            new_refresh_token = refresh_data.refresh_token
 
         structured_logger.info("Token renovado com sucesso", user_id=user["id"])
 
@@ -367,13 +387,20 @@ async def get_me(
     responses={
         200: {"description": "Logout realizado com sucesso"},
         401: {"description": "Não autenticado"},
+        429: {"description": "Muitas requisições - limite: 20/minuto"},
     },
 )
+@limiter.limit("20/minute")
 async def logout(
     request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
     user_repo = Depends(get_user_repository),
 ) -> ApiResponse[Dict[str, str]]:
+    """
+    Realiza logout do usuário, revogando o access token.
+
+    Rate limit: 20 requisições por minuto por IP.
+    """
     try:
         structured_logger = get_structured_logger()
         structured_logger.info("Logout iniciado", user_id=current_user["id"])
