@@ -280,23 +280,18 @@ class ArticleProcessor:
         return self._sanitize_payload(payload)
 
     def _sanitize_payload(self, payload: Any) -> Any:
-        """Recursively sanitize payload for JSON safety."""
+        """Recursively sanitize payload for JSON safety, preserving UTF-8 characters."""
         import unicodedata
 
         if payload is None:
             return None
 
         if isinstance(payload, str):
-            # Normalize Unicode to NFC
+            # Normalize Unicode to NFC to ensure consistent character representation
             payload = unicodedata.normalize('NFC', payload)
 
-            # Ensure valid UTF-8 encoding
-            try:
-                payload = payload.encode('utf-8', errors='ignore').decode('utf-8')
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                logger.warning(f"Failed to encode string, using ASCII: {payload[:50]}...")
-                payload = payload.encode('ascii', errors='ignore').decode('ascii')
-
+            # Strings from MySQL with utf8mb4 charset are already properly encoded
+            # No need to re-encode, just return the normalized string
             return payload
 
         elif isinstance(payload, dict):

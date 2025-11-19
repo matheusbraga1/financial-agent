@@ -114,15 +114,15 @@ class ContentCleaner:
         return content
 
     def _remove_non_printable(self, content: str) -> str:
+        """Remove apenas caracteres de controle, preservando caracteres especiais UTF-8."""
         return ''.join(
             char for char in content
             if (
-                char.isprintable()
-                or char in '\n\t\r'
-                or unicodedata.category(char)[0] == 'L'
-                or unicodedata.category(char)[0] == 'N'
-                or unicodedata.category(char)[0] == 'P'
-                or unicodedata.category(char)[0] == 'S'
+                char in '\n\t\r '  # Whitespace essencial
+                or unicodedata.category(char)[0] in ('L', 'N', 'P', 'S', 'M', 'Z')
+                # L = Letters, N = Numbers, P = Punctuation, S = Symbols
+                # M = Marks (acentos), Z = Separators (espaços especiais)
+                or char.isprintable()  # Fallback para caracteres imprimíveis
             )
         )
 

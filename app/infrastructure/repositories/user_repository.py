@@ -317,4 +317,6 @@ class SQLiteUserRepository:
             
             return deleted
 
-user_repository = SQLiteUserRepository()
+# Use factory to get the appropriate repository (PostgreSQL or SQLite based on settings)
+from app.infrastructure.repositories.repository_factory import get_user_repository
+user_repository = get_user_repository()
