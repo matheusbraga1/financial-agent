@@ -309,4 +309,6 @@ class SQLiteConversationRepository:
             
             return deleted
 
-conversation_repository = SQLiteConversationRepository()
+# Use factory to get the appropriate repository (PostgreSQL or SQLite based on settings)
+from app.infrastructure.repositories.repository_factory import get_conversation_repository
+conversation_repository = get_conversation_repository()

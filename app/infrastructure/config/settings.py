@@ -118,10 +118,42 @@ class Settings(BaseSettings):
                 "GLPI functionality may not work correctly."
             )
         return v
+
+    @validator('postgres_password')
+    def validate_postgres_password(cls, v, values):
+        db_type = values.get('database_type', 'sqlite')
+        if db_type == 'postgres' and not v:
+            raise ValueError(
+                'POSTGRES_PASSWORD is required when using PostgreSQL. '
+                'Set POSTGRES_PASSWORD environment variable.'
+            )
+        return v
     
     glpi_sync_interval_hours: int = 24
     glpi_min_content_length: int = 50
-    
+
+    # Database configuration
+    database_type: str = Field(
+        default="sqlite",
+        description="Database type: 'sqlite' or 'postgres'"
+    )
+
+    # PostgreSQL configuration
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_database: str = "financial_agent"
+    postgres_user: str = "postgres"
+    postgres_password: str = Field(
+        default="",
+        description="PostgreSQL password - MUST be set via POSTGRES_PASSWORD env var"
+    )
+    postgres_min_connections: int = 2
+    postgres_max_connections: int = 10
+
+    # SQLite configuration (legacy/fallback)
+    sqlite_users_db: str = "app_data/users.db"
+    sqlite_chat_db: str = "app_data/chat_history.db"
+
     chat_history_max_messages: int = 8
     chat_history_retention_days: int = 90
     chat_history_purge_interval_sec: int = 3600
