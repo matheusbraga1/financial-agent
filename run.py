@@ -1,3 +1,8 @@
+import os
+# Set encoding environment variables before any other imports
+os.environ['PGCLIENTENCODING'] = 'UTF8'
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+
 import uvicorn
 from app.infrastructure.config.settings import get_settings
 

@@ -1,19 +1,15 @@
 import logging
-import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-import psycopg2
-from psycopg2 import pool
-from psycopg2.extras import RealDictCursor, Json
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 from contextlib import contextmanager
 import uuid
 
 logger = logging.getLogger(__name__)
 
-
 class PostgresConversationRepository:
-    """PostgreSQL implementation of conversation repository with connection pooling."""
-
     def __init__(
         self,
         host: str = "localhost",
@@ -25,33 +21,17 @@ class PostgresConversationRepository:
         max_connections: int = 10,
         retention_days: int = 90,
     ):
-        """
-        Initialize PostgreSQL conversation repository with connection pool.
-
-        Args:
-            host: PostgreSQL host
-            port: PostgreSQL port
-            database: Database name
-            user: Database user
-            password: Database password
-            min_connections: Minimum connections in pool
-            max_connections: Maximum connections in pool
-            retention_days: Days to retain old conversations
-        """
         self.connection_pool = None
         self.retention_days = retention_days
 
         try:
-            self.connection_pool = pool.ThreadedConnectionPool(
-                minconn=min_connections,
-                maxconn=max_connections,
-                host=host,
-                port=port,
-                database=database,
-                user=user,
-                password=password,
-                cursor_factory=RealDictCursor,
-                connect_timeout=10,
+            conninfo = f"host={host} port={port} dbname={database} user={user} password={password} connect_timeout=10"
+
+            self.connection_pool = ConnectionPool(
+                conninfo=conninfo,
+                min_size=min_connections,
+                max_size=max_connections,
+                kwargs={"row_factory": dict_row},
             )
 
             logger.info(
@@ -63,32 +43,20 @@ class PostgresConversationRepository:
             raise
 
     def __del__(self):
-        """Close all connections in pool on cleanup."""
         if self.connection_pool:
-            self.connection_pool.closeall()
+            self.connection_pool.close()
             logger.info("Connection pool closed")
 
     @contextmanager
     def _get_connection(self):
-        """
-        Context manager for database connections from pool.
-
-        Yields:
-            psycopg2 connection with RealDictCursor
-        """
-        conn = None
-        try:
-            conn = self.connection_pool.getconn()
-            yield conn
-            conn.commit()
-        except Exception as e:
-            if conn:
+        with self.connection_pool.connection() as conn:
+            try:
+                yield conn
+                conn.commit()
+            except Exception as e:
                 conn.rollback()
-            logger.error(f"Database error: {e}")
-            raise
-        finally:
-            if conn:
-                self.connection_pool.putconn(conn)
+                logger.error(f"Database error: {e}")
+                raise
 
     def create_session(
         self,
@@ -96,64 +64,34 @@ class PostgresConversationRepository:
         user_id: Optional[int] = None,
         title: Optional[str] = None,
     ) -> str:
-        """
-        Create or update a conversation session.
-
-        Args:
-            session_id: Session UUID (generated if not provided)
-            user_id: User ID (optional, for authenticated users)
-            title: Conversation title (optional)
-
-        Returns:
-            Session ID (UUID string)
-        """
         if session_id is None:
             session_id = str(uuid.uuid4())
 
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Check if session exists
+                # UPSERT pattern - single query instead of SELECT + INSERT/UPDATE
                 cur.execute(
-                    "SELECT user_id FROM conversations WHERE session_id = %s",
-                    (session_id,)
+                    """
+                    INSERT INTO conversations (session_id, user_id, title, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id) DO UPDATE
+                    SET user_id = COALESCE(conversations.user_id, EXCLUDED.user_id),
+                        updated_at = EXCLUDED.updated_at
+                    WHERE conversations.user_id IS NULL AND EXCLUDED.user_id IS NOT NULL
+                    RETURNING (xmax = 0) as inserted
+                    """,
+                    (session_id, user_id, title, datetime.utcnow(), datetime.utcnow()),
                 )
-                existing = cur.fetchone()
+                result = cur.fetchone()
 
-                if existing is None:
-                    # Create new session
-                    cur.execute(
-                        """
-                        INSERT INTO conversations (session_id, user_id, title, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s)
-                        """,
-                        (session_id, user_id, title, datetime.utcnow(), datetime.utcnow()),
-                    )
+                if result and result["inserted"]:
                     logger.info(f"Session created: {session_id}")
-
-                elif user_id and not existing["user_id"]:
-                    # Update anonymous session to authenticated
-                    cur.execute(
-                        """
-                        UPDATE conversations
-                        SET user_id = %s, updated_at = %s
-                        WHERE session_id = %s
-                        """,
-                        (user_id, datetime.utcnow(), session_id),
-                    )
+                elif result:
                     logger.info(f"Session {session_id} migrated to user_id={user_id}")
 
                 return session_id
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get conversation session by ID.
-
-        Args:
-            session_id: Session UUID
-
-        Returns:
-            Session dict or None if not found
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -181,27 +119,10 @@ class PostgresConversationRepository:
         model: Optional[str] = None,
         confidence: Optional[float] = None,
     ) -> int:
-        """
-        Add message to conversation.
-
-        Args:
-            session_id: Session UUID
-            role: Message role ('user' or 'assistant')
-            content: User message content
-            answer: Assistant answer
-            sources: List of source documents (stored as JSONB)
-            model: Model used for generation
-            confidence: Confidence score (0-1)
-
-        Returns:
-            Message ID
-        """
-        # Ensure session exists
         self.create_session(session_id)
 
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Convert sources to JSON if provided
                 sources_json = Json(sources) if sources else None
 
                 if role == "user":
@@ -213,7 +134,7 @@ class PostgresConversationRepository:
                         """,
                         (session_id, role, content, datetime.utcnow()),
                     )
-                else:  # assistant
+                else:
                     cur.execute(
                         """
                         INSERT INTO messages (session_id, role, answer, sources_json, model_used, confidence, timestamp)
@@ -234,57 +155,48 @@ class PostgresConversationRepository:
         limit: int = 100,
         user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Get conversation history.
-
-        Args:
-            session_id: Session UUID
-            limit: Maximum number of messages
-            user_id: User ID for authorization check
-
-        Returns:
-            List of message dicts
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Authorization check if user_id provided
                 if user_id is not None:
+                    # Combined query: check permission and get messages in single query
                     cur.execute(
-                        "SELECT user_id FROM conversations WHERE session_id = %s",
-                        (session_id,),
-                    )
-                    session_row = cur.fetchone()
-
-                    if not session_row:
-                        logger.warning(f"Session {session_id} not found")
-                        return []
-
-                    session_user_id = session_row["user_id"]
-                    if session_user_id and session_user_id != user_id:
-                        logger.warning(
-                            f"User {user_id} attempted to access session {session_id} "
-                            f"belonging to user {session_user_id}"
+                        """
+                        WITH session_check AS (
+                            SELECT user_id
+                            FROM conversations
+                            WHERE session_id = %s
                         )
-                        return []
+                        SELECT
+                            m.id, m.role::text, m.content, m.answer,
+                            m.sources_json, m.model_used, m.confidence, m.timestamp
+                        FROM messages m
+                        WHERE m.session_id = %s
+                          AND EXISTS (
+                              SELECT 1 FROM session_check sc
+                              WHERE sc.user_id IS NULL OR sc.user_id = %s
+                          )
+                        ORDER BY m.timestamp ASC
+                        LIMIT %s
+                        """,
+                        (session_id, session_id, user_id, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, role::text, content, answer, sources_json, model_used, confidence, timestamp
+                        FROM messages
+                        WHERE session_id = %s
+                        ORDER BY timestamp ASC
+                        LIMIT %s
+                        """,
+                        (session_id, limit),
+                    )
 
-                # Get messages
-                cur.execute(
-                    """
-                    SELECT id, role::text, content, answer, sources_json, model_used, confidence, timestamp
-                    FROM messages
-                    WHERE session_id = %s
-                    ORDER BY timestamp ASC
-                    LIMIT %s
-                    """,
-                    (session_id, limit),
-                )
                 rows = cur.fetchall()
 
-                # Convert to list of dicts
                 messages = []
                 for row in rows:
                     message = dict(row)
-                    # Convert sources_json to list if present
                     if message.get("sources_json"):
                         message["sources_json"] = message["sources_json"]
                     messages.append(message)
@@ -292,15 +204,6 @@ class PostgresConversationRepository:
                 return messages
 
     def get_message_by_id(self, message_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get message by ID.
-
-        Args:
-            message_id: Message ID
-
-        Returns:
-            Message dict or None if not found
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -317,7 +220,6 @@ class PostgresConversationRepository:
                     return None
 
                 message = dict(row)
-                # Convert sources_json to list if present
                 if message.get("sources_json"):
                     message["sources_json"] = message["sources_json"]
 
@@ -330,18 +232,6 @@ class PostgresConversationRepository:
         rating: str,
         comment: Optional[str] = None,
     ) -> int:
-        """
-        Add feedback to a message.
-
-        Args:
-            session_id: Session UUID
-            message_id: Message ID
-            rating: Rating ('positive', 'negative', or 'neutral')
-            comment: Optional feedback comment
-
-        Returns:
-            Feedback ID
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -364,19 +254,10 @@ class PostgresConversationRepository:
         limit: int = 100,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """
-        Get user's conversation sessions with statistics.
-
-        Args:
-            user_id: User ID
-            limit: Maximum number of sessions
-            offset: Pagination offset
-
-        Returns:
-            List of session dicts with statistics
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
+                # Optimized: Use LATERAL JOIN instead of correlated subquery
+                # and DISTINCT ON for getting last message efficiently
                 cur.execute(
                     """
                     SELECT
@@ -385,18 +266,22 @@ class PostgresConversationRepository:
                         c.title,
                         c.created_at,
                         c.updated_at,
-                        COUNT(m.id) as message_count,
-                        (
-                            SELECT COALESCE(content, answer, 'New conversation')
-                            FROM messages
-                            WHERE session_id = c.session_id
-                            ORDER BY timestamp DESC
-                            LIMIT 1
-                        ) as last_message
+                        COALESCE(msg_stats.message_count, 0) as message_count,
+                        COALESCE(last_msg.last_message, 'New conversation') as last_message
                     FROM conversations c
-                    LEFT JOIN messages m ON c.session_id = m.session_id
+                    LEFT JOIN LATERAL (
+                        SELECT COUNT(*) as message_count
+                        FROM messages
+                        WHERE session_id = c.session_id
+                    ) msg_stats ON true
+                    LEFT JOIN LATERAL (
+                        SELECT COALESCE(content, answer) as last_message
+                        FROM messages
+                        WHERE session_id = c.session_id
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    ) last_msg ON true
                     WHERE c.user_id = %s
-                    GROUP BY c.session_id, c.user_id, c.title, c.created_at, c.updated_at
                     ORDER BY c.updated_at DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -407,15 +292,6 @@ class PostgresConversationRepository:
                 return [dict(r) for r in rows]
 
     def get_user_sessions_count(self, user_id: int) -> int:
-        """
-        Get count of user's sessions.
-
-        Args:
-            user_id: User ID
-
-        Returns:
-            Number of sessions
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -431,15 +307,6 @@ class PostgresConversationRepository:
                 return row["count"] if row else 0
 
     def delete_session(self, session_id: str) -> bool:
-        """
-        Delete conversation session (cascades to messages and feedback).
-
-        Args:
-            session_id: Session UUID
-
-        Returns:
-            True if session was deleted, False otherwise
-        """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -454,15 +321,6 @@ class PostgresConversationRepository:
                 return deleted
 
     def purge_old_conversations(self, days: Optional[int] = None) -> int:
-        """
-        Purge conversations older than specified days using helper function.
-
-        Args:
-            days: Days to retain (defaults to instance retention_days)
-
-        Returns:
-            Number of conversations deleted
-        """
         days = days or self.retention_days
 
         with self._get_connection() as conn:

@@ -27,7 +27,6 @@ from app.presentation.api.security import (
     revoke_token,
 )
 from app.infrastructure.config.settings import get_settings
-from app.infrastructure.repositories.user_repository import SQLiteUserRepository
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -48,7 +47,7 @@ router = APIRouter()
 )
 async def register(
     request: RegisterRequest,
-    user_repo: SQLiteUserRepository = Depends(get_user_repository),
+    user_repo = Depends(get_user_repository),
 ) -> ApiResponse[UserResponse]:
     try:
         structured_logger = get_structured_logger()
@@ -138,7 +137,7 @@ async def register(
 )
 async def login(
     request: LoginRequest,
-    user_repo: SQLiteUserRepository = Depends(get_user_repository),
+    user_repo = Depends(get_user_repository),
 ) -> TokenResponse:
     try:
         structured_logger = get_structured_logger()
@@ -201,7 +200,7 @@ async def login(
                 expires_at=expires_at,
             )
         except Exception as e:
-            logger.warning(f"Falha ao armazenar refresh token no SQLite: {e}")
+            logger.warning(f"Falha ao armazenar refresh token: {e}")
 
         structured_logger.info(
             "Login bem-sucedido",
@@ -236,7 +235,7 @@ async def login(
 )
 async def refresh_token(
     request: RefreshTokenRequest,
-    user_repo: SQLiteUserRepository = Depends(get_user_repository),
+    user_repo = Depends(get_user_repository),
 ) -> TokenResponse:
     try:
         structured_logger = get_structured_logger()
@@ -369,7 +368,7 @@ async def get_me(
 async def logout(
     request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    user_repo: SQLiteUserRepository = Depends(get_user_repository),
+    user_repo = Depends(get_user_repository),
 ) -> ApiResponse[Dict[str, str]]:
     try:
         structured_logger = get_structured_logger()

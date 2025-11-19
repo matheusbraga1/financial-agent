@@ -75,15 +75,18 @@ async def health_check(
         }
 
     try:
-        from app.infrastructure.repositories.conversation_repository import conversation_repository
-        conn = conversation_repository._connect()
-        conn.execute("SELECT 1")
-        conn.close()
-        
+        from app.infrastructure.repositories.repository_factory import get_conversation_repository
+        conversation_repo = get_conversation_repository()
+
+        with conversation_repo._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+
         health["components"]["database"] = {
             "status": "healthy",
-            "type": "sqlite",
-            "location": "app_data/",
+            "type": "postgres",
+            "host": settings.postgres_host,
+            "database": settings.postgres_database,
         }
     except Exception as e:
         logger.error(f"Database health check failed: {e}")

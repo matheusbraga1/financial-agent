@@ -12,6 +12,10 @@ from app.presentation.models.chat_models import (
     ChatHistoryResponse,
     SessionsResponse,
     SessionInfo,
+    ModelsConfigResponse,
+    LLMConfig,
+    EmbeddingsConfig,
+    RAGConfig,
 )
 from app.presentation.api.responses import ApiResponse
 from app.presentation.api.dependencies import (
@@ -372,10 +376,10 @@ async def chat_stream(
     summary="Enviar feedback sobre resposta",
 )
 async def submit_feedback(
-    session_id: str,
-    message_id: int,
-    rating: str,
-    comment: Optional[str] = None,
+    session_id: str = Query(..., description="ID da sessão", pattern=r"^[a-f0-9-]{36}$"),
+    message_id: int = Query(..., description="ID da mensagem", ge=1),
+    rating: str = Query(..., description="Rating: positive, neutral, negative"),
+    comment: Optional[str] = Query(None, description="Comentário opcional", max_length=1000),
     manage_conversation_uc: ManageConversationUseCase = Depends(get_manage_conversation_use_case),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
@@ -407,6 +411,45 @@ async def submit_feedback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro ao registrar feedback",
+        )
+
+
+@router.get(
+    "/history/{session_id}",
+    response_model=ChatHistoryResponse,
+    summary="Obter histórico de conversação por path",
+)
+async def get_history_by_path(
+    session_id: str,
+    limit: int = Query(50, ge=1, le=200, description="Limite de mensagens"),
+    manage_conversation_uc: ManageConversationUseCase = Depends(get_manage_conversation_use_case),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    structured_logger: StructuredLogger = Depends(get_structured_logger),
+) -> ChatHistoryResponse:
+    try:
+        structured_logger.info(
+            "Recuperando histórico",
+            session_id=session_id,
+            user_id=current_user["id"],
+            limit=limit
+        )
+
+        history = manage_conversation_uc.get_history(
+            session_id=session_id,
+            user_id=str(current_user["id"]),
+            limit=limit,
+        )
+
+        return ChatHistoryResponse(
+            session_id=session_id,
+            messages=history,
+        )
+
+    except Exception as e:
+        structured_logger.error("Erro ao recuperar histórico", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao recuperar histórico",
         )
 
 
@@ -541,30 +584,34 @@ async def delete_session(
 
 @router.get(
     "/models",
+    response_model=ModelsConfigResponse,
     summary="Obter configuração de modelos",
+    responses={
+        200: {"description": "Configuração de modelos retornada"},
+    },
 )
 async def get_models_config(
     structured_logger: StructuredLogger = Depends(get_structured_logger),
-) -> Dict[str, Any]:
+) -> ModelsConfigResponse:
     from app.infrastructure.config.settings import get_settings
 
     settings = get_settings()
 
     structured_logger.info("Consultando configuração de modelos")
 
-    return {
-        "llm": {
-            "provider": settings.llm_provider,
-            "model": settings.groq_model if settings.llm_provider == "groq" else settings.ollama_model,
-            "temperature": settings.llm_temperature,
-        },
-        "embeddings": {
-            "model": settings.embedding_model,
-            "dimension": settings.embedding_dimension,
-        },
-        "rag": {
-            "top_k": settings.top_k_results,
-            "min_similarity": settings.min_similarity_score,
-            "reranking_enabled": settings.enable_reranking,
-        }
-    }
+    return ModelsConfigResponse(
+        llm=LLMConfig(
+            provider=settings.llm_provider,
+            model=settings.groq_model if settings.llm_provider == "groq" else settings.ollama_model,
+            temperature=settings.llm_temperature,
+        ),
+        embeddings=EmbeddingsConfig(
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+        ),
+        rag=RAGConfig(
+            top_k=settings.top_k_results,
+            min_similarity=settings.min_similarity_score,
+            reranking_enabled=settings.enable_reranking,
+        )
+    )

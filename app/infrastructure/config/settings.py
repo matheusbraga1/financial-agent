@@ -2,6 +2,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, validator
 from functools import lru_cache
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Get the project root directory (where .env is located)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+# Load .env with override to ensure .env values take precedence
+load_dotenv(_ENV_FILE, override=True)
 
 class Settings(BaseSettings):
     app_name: str = "Financial Agent"
@@ -121,22 +130,15 @@ class Settings(BaseSettings):
 
     @validator('postgres_password')
     def validate_postgres_password(cls, v, values):
-        db_type = values.get('database_type', 'sqlite')
-        if db_type == 'postgres' and not v:
+        if not v:
             raise ValueError(
-                'POSTGRES_PASSWORD is required when using PostgreSQL. '
+                'POSTGRES_PASSWORD is required. '
                 'Set POSTGRES_PASSWORD environment variable.'
             )
         return v
     
     glpi_sync_interval_hours: int = 24
     glpi_min_content_length: int = 50
-
-    # Database configuration
-    database_type: str = Field(
-        default="sqlite",
-        description="Database type: 'sqlite' or 'postgres'"
-    )
 
     # PostgreSQL configuration
     postgres_host: str = "localhost"
@@ -149,10 +151,6 @@ class Settings(BaseSettings):
     )
     postgres_min_connections: int = 2
     postgres_max_connections: int = 10
-
-    # SQLite configuration (legacy/fallback)
-    sqlite_users_db: str = "app_data/users.db"
-    sqlite_chat_db: str = "app_data/chat_history.db"
 
     chat_history_max_messages: int = 8
     chat_history_retention_days: int = 90
@@ -170,7 +168,8 @@ class Settings(BaseSettings):
     qa_memory_min_answer_length: int = 40
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
     )

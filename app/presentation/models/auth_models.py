@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, field_validator
 
 class LoginRequest(BaseModel):
@@ -8,13 +9,22 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
-    password: str = Field(..., min_length=6)
-    
+    password: str = Field(
+        ...,
+        min_length=8,
+        max_length=128,
+        description="Senha com mínimo 8 caracteres"
+    )
+
     @field_validator("password")
     @classmethod
     def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Senha deve ter no mínimo 8 caracteres")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Senha deve conter pelo menos uma letra maiúscula")
+        if not any(c.islower() for c in v):
+            raise ValueError("Senha deve conter pelo menos uma letra minúscula")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Senha deve conter pelo menos um número")
         return v
 
 class RefreshTokenRequest(BaseModel):
@@ -33,7 +43,12 @@ class UserResponse(BaseModel):
     email: str
     is_active: bool
     is_admin: bool
-    created_at: str
+    created_at: datetime
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
 
 
 class MeResponse(BaseModel):

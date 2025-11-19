@@ -31,8 +31,14 @@ from app.infrastructure.adapters.llm.hybrid_llm_adapter import HybridLLMAdapter
 from app.infrastructure.adapters.embeddings.sentence_transformer_adapter import SentenceTransformerAdapter
 from app.infrastructure.adapters.vector_store.qdrant_adapter import QdrantAdapter
 
-from app.infrastructure.repositories.conversation_repository import conversation_repository
-from app.infrastructure.repositories.user_repository import user_repository
+from app.infrastructure.repositories.repository_factory import (
+    get_user_repository as create_user_repository,
+    get_conversation_repository as create_conversation_repository,
+)
+
+# Initialize repositories using factory (respects DATABASE_TYPE setting)
+user_repository = create_user_repository()
+conversation_repository = create_conversation_repository()
 
 from app.application.use_cases.chat.generate_answer_use_case import GenerateAnswerUseCase
 from app.application.use_cases.chat.stream_answer_use_case import StreamAnswerUseCase

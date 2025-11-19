@@ -1,9 +1,8 @@
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
-import psycopg2
-from psycopg2 import pool, sql
-from psycopg2.extras import RealDictCursor
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
@@ -37,18 +36,13 @@ class PostgresUserRepository:
         self.connection_pool = None
 
         try:
-            self.connection_pool = pool.ThreadedConnectionPool(
-                minconn=min_connections,
-                maxconn=max_connections,
-                host=host,
-                port=port,
-                database=database,
-                user=user,
-                password=password,
-                cursor_factory=RealDictCursor,
-                connect_timeout=10,
-                client_encoding='UTF8',
-                options='-c client_encoding=UTF8',
+            conninfo = f"host={host} port={port} dbname={database} user={user} password={password} connect_timeout=10"
+
+            self.connection_pool = ConnectionPool(
+                conninfo=conninfo,
+                min_size=min_connections,
+                max_size=max_connections,
+                kwargs={"row_factory": dict_row},
             )
 
             logger.info(
@@ -62,7 +56,7 @@ class PostgresUserRepository:
     def __del__(self):
         """Close all connections in pool on cleanup."""
         if self.connection_pool:
-            self.connection_pool.closeall()
+            self.connection_pool.close()
             logger.info("Connection pool closed")
 
     @contextmanager
@@ -71,21 +65,16 @@ class PostgresUserRepository:
         Context manager for database connections from pool.
 
         Yields:
-            psycopg2 connection with RealDictCursor
+            psycopg connection with dict row factory
         """
-        conn = None
-        try:
-            conn = self.connection_pool.getconn()
-            yield conn
-            conn.commit()
-        except Exception as e:
-            if conn:
+        with self.connection_pool.connection() as conn:
+            try:
+                yield conn
+                conn.commit()
+            except Exception as e:
                 conn.rollback()
-            logger.error(f"Database error: {e}")
-            raise
-        finally:
-            if conn:
-                self.connection_pool.putconn(conn)
+                logger.error(f"Database error: {e}")
+                raise
 
     def create_user(
         self,
@@ -113,38 +102,30 @@ class PostgresUserRepository:
         """
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Check if username exists
+                # Single query to check both username and email existence
                 cur.execute(
-                    "SELECT id FROM users WHERE username = %s",
-                    (username,)
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM users WHERE username = %s) as username_exists,
+                        EXISTS(SELECT 1 FROM users WHERE email = %s) as email_exists
+                    """,
+                    (username, email)
                 )
-                if cur.fetchone():
-                    raise ValueError(f"Username '{username}' already exists")
+                result = cur.fetchone()
 
-                # Check if email exists
-                cur.execute(
-                    "SELECT id FROM users WHERE email = %s",
-                    (email,)
-                )
-                if cur.fetchone():
+                if result["username_exists"]:
+                    raise ValueError(f"Username '{username}' already exists")
+                if result["email_exists"]:
                     raise ValueError(f"Email '{email}' already exists")
 
                 # Insert new user
                 cur.execute(
                     """
                     INSERT INTO users (username, email, hashed_password, is_active, is_admin, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                     RETURNING id
                     """,
-                    (
-                        username,
-                        email,
-                        hashed_password,
-                        is_active,
-                        is_admin,
-                        datetime.utcnow(),
-                        datetime.utcnow(),
-                    ),
+                    (username, email, hashed_password, is_active, is_admin),
                 )
 
                 user_id = cur.fetchone()["id"]

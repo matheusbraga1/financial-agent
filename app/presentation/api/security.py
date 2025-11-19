@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
@@ -41,9 +42,12 @@ def create_access_token(
             minutes=settings.access_token_expire_minutes
         )
     
+    jti = secrets.token_urlsafe(32)
+
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
+        "jti": jti,
         "type": "access",
     })
     
@@ -60,17 +64,20 @@ def create_refresh_token(
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     to_encode = data.copy()
-    
+
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(
             days=settings.refresh_token_expire_days
         )
-    
+
+    jti = secrets.token_urlsafe(32)
+
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
+        "jti": jti,
         "type": "refresh",
     })
     

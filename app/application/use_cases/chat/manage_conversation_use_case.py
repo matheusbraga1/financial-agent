@@ -66,19 +66,17 @@ class ManageConversationUseCase:
         confidence: Optional[float],
     ) -> Optional[int]:
         try:
-            sources_json = json.dumps(sources, ensure_ascii=False)
-            
             message_id = self.conversations.add_message(
                 session_id=session_id,
                 role="assistant",
                 answer=answer,
-                sources=sources_json,
+                sources=sources,
                 model=model_used,
                 confidence=confidence,
             )
-            
+
             return message_id
-            
+
         except Exception as e:
             logger.warning(f"Falha ao persistir resposta: {e}")
             return None

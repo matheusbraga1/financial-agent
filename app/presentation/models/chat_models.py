@@ -83,3 +83,26 @@ class SessionsResponse(BaseModel):
     limit: int = Field(..., description="Limite de sessões por página")
     offset: int = Field(..., description="Offset atual da paginação")
     has_more: bool = Field(..., description="Indica se há mais sessões")
+
+
+class LLMConfig(BaseModel):
+    provider: str = Field(..., description="Provedor do LLM (groq, ollama)")
+    model: str = Field(..., description="Nome do modelo")
+    temperature: float = Field(..., ge=0.0, le=2.0, description="Temperatura")
+
+
+class EmbeddingsConfig(BaseModel):
+    model: str = Field(..., description="Modelo de embeddings")
+    dimension: int = Field(..., gt=0, description="Dimensão dos embeddings")
+
+
+class RAGConfig(BaseModel):
+    top_k: int = Field(..., gt=0, description="Número de resultados")
+    min_similarity: float = Field(..., ge=0.0, le=1.0, description="Similaridade mínima")
+    reranking_enabled: bool = Field(..., description="Reranking ativo")
+
+
+class ModelsConfigResponse(BaseModel):
+    llm: LLMConfig
+    embeddings: EmbeddingsConfig
+    rag: RAGConfig
