@@ -1,5 +1,6 @@
 import re
 import logging
+import unicodedata
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -395,10 +396,24 @@ class IntelligentChunker:
         return min(1.0, max(0.0, score))
     
     def _normalize_text(self, text: str) -> str:
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
+        if not text:
+            return ""
+
+        text = unicodedata.normalize('NFC', text)
+
+        normalized_chars = []
+        for char in text:
+            category = unicodedata.category(char)
+            if category[0] != 'C' or char in '\n\t\r':
+                normalized_chars.append(char)
+
+        text = ''.join(normalized_chars)
+
         text = text.replace('\r\n', '\n')
         text = text.replace('\r', '\n')
-        
+
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+        text = re.sub(r' *\n *', '\n', text)
+
         return text.strip()

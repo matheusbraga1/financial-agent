@@ -1,114 +1,113 @@
-"""CrossEncoder reranking for document retrieval.
-
-Uses a CrossEncoder model to rerank documents based on semantic similarity
-to the query, improving precision over pure vector search.
-"""
-
-import logging
 from typing import List, Dict, Any, Optional
+import logging
+from sentence_transformers import CrossEncoder
 
 logger = logging.getLogger(__name__)
 
 
 class CrossEncoderReranker:
-    """Reranks documents using CrossEncoder for better precision.
+    _model_cache: Dict[str, CrossEncoder] = {}
 
-    The CrossEncoder model scores (query, document) pairs directly,
-    which is more accurate than comparing embeddings separately.
-    """
+    def __init__(
+        self,
+        model_name: str = "jinaai/jina-reranker-v2-base-multilingual",
+        device: str = "cpu",
+    ):
+        self.model_name = model_name
+        self.device = device
 
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
-        """Initialize CrossEncoder reranker.
+        if model_name not in self._model_cache:
+            logger.info(f"Carregando cross-encoder: {model_name}")
 
-        Args:
-            model_name: HuggingFace model name for CrossEncoder
-        """
-        self._model = None
-        self._model_name = model_name
-        self._enabled = True
-        logger.info(f"CrossEncoderReranker initialized (lazy loading: {model_name})")
-
-    def _load_model(self):
-        """Lazy load the CrossEncoder model."""
-        if self._model is None and self._enabled:
             try:
-                from sentence_transformers import CrossEncoder
-
-                logger.info(f"Loading CrossEncoder model: {self._model_name}")
-                self._model = CrossEncoder(self._model_name)
-                logger.info("CrossEncoder loaded successfully")
+                if "jina" in model_name.lower():
+                    self._model_cache[model_name] = CrossEncoder(
+                        model_name,
+                        device=device,
+                        max_length=512,
+                        trust_remote_code=True,
+                    )
+                else:
+                    self._model_cache[model_name] = CrossEncoder(
+                        model_name,
+                        device=device,
+                        max_length=512,
+                    )
+                logger.info(f"Cross-encoder carregado: {model_name}")
             except Exception as e:
-                logger.warning(f"Failed to load CrossEncoder: {e}. Reranking disabled.")
-                self._enabled = False
-        return self._model
+                logger.error(f"Erro ao carregar cross-encoder: {e}")
+                raise
 
-    def is_enabled(self) -> bool:
-        """Check if reranking is enabled."""
-        return self._enabled
+        self.model = self._model_cache[model_name]
 
     def rerank(
         self,
         query: str,
         documents: List[Dict[str, Any]],
+        top_k: Optional[int] = None,
         original_weight: float = 0.3,
         rerank_weight: float = 0.7,
     ) -> List[Dict[str, Any]]:
-        """Rerank documents using CrossEncoder.
+        if not documents:
+            return []
 
-        Args:
-            query: User query
-            documents: List of documents to rerank
-            original_weight: Weight for original retrieval score (0-1)
-            rerank_weight: Weight for reranking score (0-1)
-
-        Returns:
-            Reranked list of documents with updated scores
-
-        Note:
-            Scores are normalized to [0, 1] range and clamped.
-        """
-        model = self._load_model()
-        if model is None or not documents:
+        if len(documents) == 1:
             return documents
 
-        # Prepare (query, doc) pairs for CrossEncoder
-        pairs = []
-        for doc in documents:
-            content_preview = doc.get("content", "")[:500] if doc.get("content") else ""
-            text = f"{doc.get('title', '')}. {content_preview}"
-            pairs.append([query, text])
-
         try:
-            # Get raw scores from CrossEncoder
-            rerank_scores = model.predict(pairs)
+            pairs = []
+            for doc in documents:
+                title = doc.get("title", "")
+                content = doc.get("content", "")
 
-            # Normalize scores to [0, 1] using sigmoid
+                doc_text = f"{title} {content}"[:500]
+
+                pairs.append([query, doc_text])
+
+            logger.debug(f"Reranking {len(pairs)} documentos com cross-encoder")
+
+            rerank_scores = self.model.predict(
+                pairs,
+                show_progress_bar=False,
+                batch_size=32,
+            )
+
             import numpy as np
-            normalized_scores = 1 / (1 + np.exp(-np.array(rerank_scores)))
+            normalized_rerank_scores = 1 / (1 + np.exp(-rerank_scores))
 
-            logger.debug(
-                f"CrossEncoder scores - Original: min={rerank_scores.min():.2f}, "
-                f"max={rerank_scores.max():.2f}"
-            )
-            logger.debug(
-                f"Normalized scores: min={normalized_scores.min():.2f}, "
-                f"max={normalized_scores.max():.2f}"
-            )
+            reranked_docs = []
 
-            # Combine original and reranking scores
-            for doc, score in zip(documents, normalized_scores):
+            for i, doc in enumerate(documents):
                 original_score = doc.get("score", 0.0)
-                combined_score = (original_score * original_weight) + (float(score) * rerank_weight)
-                doc["score"] = max(0.0, min(1.0, combined_score))
+                rerank_score = float(normalized_rerank_scores[i])
 
-            # Sort by new scores
-            documents.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+                combined_score = (
+                    original_weight * original_score +
+                    rerank_weight * rerank_score
+                )
 
-            logger.debug(
-                f"Reranking completed - {len(documents)} documents reordered"
-            )
+                reranked_doc = doc.copy()
+                reranked_doc["score"] = combined_score
+                reranked_doc["original_score"] = original_score
+                reranked_doc["rerank_score"] = rerank_score
+
+                reranked_docs.append(reranked_doc)
+
+            reranked_docs.sort(key=lambda x: x["score"], reverse=True)
+
+            if top_k:
+                reranked_docs = reranked_docs[:top_k]
+
+            if len(reranked_docs) >= 3:
+                logger.debug(
+                    f"Reranking concluído - top 3: "
+                    f"1) {reranked_docs[0].get('title', '')[:30]} (score: {reranked_docs[0]['score']:.3f}), "
+                    f"2) {reranked_docs[1].get('title', '')[:30]} (score: {reranked_docs[1]['score']:.3f}), "
+                    f"3) {reranked_docs[2].get('title', '')[:30]} (score: {reranked_docs[2]['score']:.3f})"
+                )
+
+            return reranked_docs
 
         except Exception as e:
-            logger.warning(f"Error during reranking: {e}. Returning original order.")
-
-        return documents
+            logger.error(f"Erro no reranking: {e}", exc_info=True)
+            return documents

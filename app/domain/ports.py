@@ -95,7 +95,6 @@ class LLMPort(Protocol):
         ...
 
 
-# Conversas / histÃ³rico
 class ConversationPort(Protocol):
     def ensure_session(self, session_id: str, user_id: Optional[str] = None) -> None:
         ...
@@ -138,7 +137,6 @@ class ConversationPort(Protocol):
         ...
 
 
-# RAG subcomponentes (para SRP e fÃ¡cil substituiÃ§Ã£o)
 class QueryExpanderPort(Protocol):
     def expand(self, question: str) -> str:
         ...
@@ -170,8 +168,4 @@ class AnswerFormatterPort(Protocol):
 
 class ClarifierPort(Protocol):
     def maybe_clarify(self, question: str, documents: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
-        """Retorna uma pergunta de esclarecimento se a pergunta original for genérica/ambígua.
-
-        Caso contrário, retorna None.
-        """
         ...

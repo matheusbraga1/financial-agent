@@ -30,7 +30,12 @@
       "Bash(timeout 15 python:*)",
       "Bash(timeout 30 python:*)",
       "Bash(timeout 10 bash:*)",
-      "Bash(timeout 15 bash:*)"
+      "Bash(timeout 15 bash:*)",
+      "Bash(powershell -Command \"Stop-Process -Id 27336 -Force\")",
+      "Bash(for:*)",
+      "Bash(do curl -s http://localhost:8001/ -w '\\nStatus: %{http_code}\\n')",
+      "Bash(done)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

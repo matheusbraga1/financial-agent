@@ -1,11 +1,9 @@
 import uvicorn
-from app.core.config import get_settings
-from app.core.logging import setup_logging
+from app.infrastructure.config.settings import get_settings
 
 settings = get_settings()
 
 if __name__ == "__main__":
-    setup_logging()
     uvicorn.run(
         "app.main:app",
         host=settings.host,

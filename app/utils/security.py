@@ -1,130 +1,128 @@
-import os
-import hmac
-import hashlib
-import secrets
+import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
+from typing import Optional, Dict, Any
 
-import jwt
+from passlib.context import CryptContext
 
-from app.core.config import get_settings
+from app.infrastructure.config.settings import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
-def create_tokens(user_id: int, is_admin: bool = False) -> Dict[str, Any]:
-    now = datetime.now(timezone.utc)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    if len(password) < 8:
+        raise ValueError(
+            "Senha muito curta. Mínimo de 8 caracteres necessário."
+        )
     
-    access_exp = now + timedelta(minutes=settings.access_token_expire_minutes)
-    access_jti = secrets.token_hex(16)
-    access_payload = {
-        'sub': str(user_id),
-        'iss': settings.app_name,
-        'iat': int(now.timestamp()),
-        'exp': int(access_exp.timestamp()),
-        'jti': access_jti,
-        'type': 'access',
-        'is_admin': is_admin,
-    }
-    access_token = jwt.encode(
-        access_payload,
-        settings.jwt_secret,
-        algorithm=settings.jwt_algorithm
-    )
-    
-    refresh_exp = now + timedelta(days=7)
-    refresh_jti = secrets.token_hex(16)
-    refresh_payload = {
-        'sub': str(user_id),
-        'iss': settings.app_name,
-        'iat': int(now.timestamp()),
-        'exp': int(refresh_exp.timestamp()),
-        'jti': refresh_jti,
-        'type': 'refresh',
-    }
-    refresh_token = jwt.encode(
-        refresh_payload,
-        settings.jwt_secret,
-        algorithm=settings.jwt_algorithm
-    )
-    
-    return {
-        'access_token': access_token,
-        'access_jti': access_jti,
-        'access_expires_at': access_exp,
-        'refresh_token': refresh_token,
-        'refresh_jti': refresh_jti,
-        'refresh_expires_at': refresh_exp,
-    }
+    if len(password) > 72:
+        raise ValueError(
+            "Senha muito longa. Máximo de 72 caracteres permitido."
+        )
 
+    rounds = 10 if settings.debug else 12
 
-def create_access_token(user_id: int, is_admin: bool = False) -> str:
-    tokens = create_tokens(user_id, is_admin)
-    return tokens['access_token']
+    return pwd_context.using(bcrypt__rounds=rounds).hash(password)
 
-
-def decode_token(token: str) -> Dict[str, Any]:
-    return jwt.decode(
-        token,
-        settings.jwt_secret,
-        algorithms=[settings.jwt_algorithm],
-        options={"verify_exp": True}
-    )
-
-def _pbkdf2_hash(password: str, salt: bytes, iterations: int = 200_000) -> bytes:
-    return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
-
-
-def hash_password(password: str, iterations: int | None = None) -> str:
-    if not password or len(password) < 8:
-        raise ValueError("Senha muito curta")
-    settings = get_settings()
-    ci = os.getenv("CI", "").lower() in ("1", "true", "yes")
-    iters = (
-        iterations
-        if iterations is not None
-        else (settings.password_hash_iterations_dev if (settings.debug or ci) else settings.password_hash_iterations)
-    )
-    salt = secrets.token_bytes(16)
-    digest = _pbkdf2_hash(password, salt, iters)
-    return f"pbkdf2${iters}${salt.hex()}${digest.hex()}"
-
-
-def verify_password(password: str, hashed: str) -> bool:
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
-        scheme, iters_s, salt_hex, digest_hex = hashed.split('$', 3)
-        if scheme != 'pbkdf2':
-            return False
-        iterations = int(iters_s)
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-        computed = _pbkdf2_hash(password, salt, iterations)
-        return hmac.compare_digest(computed, expected)
-    except Exception:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        logger.error(f"Erro ao verificar senha: {e}")
         return False
 
+def create_access_token(
+    data: Dict[str, Any],
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    from app.presentation.api.dependencies import get_jwt_handler
 
-def create_access_token(subject: str, claims: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    settings = get_settings()
-    now = datetime.now(timezone.utc)
-    exp = now + timedelta(minutes=settings.access_token_expire_minutes)
-    jti = secrets.token_hex(16)
-    payload = {
-        'sub': subject,
-        'iss': settings.app_name,
-        'iat': int(now.timestamp()),
-        'exp': int(exp.timestamp()),
-        'jti': jti,
-    }
-    if claims:
-        payload.update(claims)
-    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    jwt_handler = get_jwt_handler()
+
+    user_id = data.get("sub")
+    email = data.get("email", "")
+    username = data.get("username", "")
+
+    token, jti = jwt_handler.create_access_token(
+        user_id=user_id,
+        email=email,
+        roles=[],
+        permissions=[],
+        additional_claims={"username": username}
+    )
+
+    return token
+
+def create_refresh_token(
+    data: Dict[str, Any],
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    from app.presentation.api.dependencies import get_jwt_handler
+
+    jwt_handler = get_jwt_handler()
+
+    user_id = data.get("sub")
+
+    token, jti = jwt_handler.create_refresh_token(user_id=user_id)
+
+    return token
+
+def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
+    from app.presentation.api.dependencies import get_jwt_handler
+
+    jwt_handler = get_jwt_handler()
+    token_data = jwt_handler.decode_token(token)
+
+    if not token_data:
+        return None
+
+    if token_data.type != "access":
+        logger.warning("Token não é do tipo 'access'")
+        return None
+
     return {
-        'token': token,
-        'jti': jti,
-        'exp': exp,
+        "sub": token_data.sub,
+        "email": token_data.email,
+        "username": token_data.sub,
+        "type": token_data.type,
     }
 
+def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+    from app.presentation.api.dependencies import get_jwt_handler
 
-def decode_token(token: str) -> Dict[str, Any]:
-    settings = get_settings()
-    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    jwt_handler = get_jwt_handler()
+    token_data = jwt_handler.decode_token(token)
+
+    if not token_data:
+        return None
+
+    if token_data.type != "refresh":
+        logger.warning("Token não é do tipo 'refresh'")
+        return None
+
+    return {
+        "sub": token_data.sub,
+        "type": token_data.type,
+    }
+
+def revoke_token(token: str) -> bool:
+    from app.presentation.api.dependencies import get_jwt_handler
+
+    jwt_handler = get_jwt_handler()
+
+    token_data = jwt_handler.decode_token(token)
+
+    if not token_data or not token_data.jti or not token_data.exp:
+        logger.warning("Token inválido ou sem JTI/exp para revogação")
+        return False
+
+    success = jwt_handler.revoke_token(token_data.jti, token_data.exp)
+
+    if success:
+        logger.info(f"Token revogado com sucesso: jti={token_data.jti}")
+    else:
+        logger.warning(f"Falha ao revogar token: jti={token_data.jti}")
+
+    return success

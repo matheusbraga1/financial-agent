@@ -1,5 +1,3 @@
-"""Custom exceptions for the application."""
-
 from app.shared.exceptions.domain_exceptions import (
     DomainException,
     ValidationException,

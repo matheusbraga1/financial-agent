@@ -1,272 +1,352 @@
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
-from typing import List, Dict, Any, Optional
 import logging
 import re
-from html import unescape
-
-from app.core.config import get_settings
-from app.utils.retry import retry_database_operation
-
+from typing import List, Dict, Any, Optional
+import pymysql
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
+class GLPIClient:
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 3306,
+        database: str = "glpi",
+        user: str = "glpi",
+        password: str = "",
+        table_prefix: str = "glpi_",
+    ):
+        if not re.match(r'^[a-z0-9_]+$', table_prefix):
+            raise ValueError(
+                f"Invalid table_prefix '{table_prefix}'. "
+                "Only lowercase letters, numbers, and underscores allowed."
+            )
 
-class GLPIService:
-    def __init__(self):
-        self.prefix = settings.glpi_db_prefix
-        self._engine: Optional[Engine] = None
-        self._connect()
+        self.config = {
+            "host": host,
+            "port": port,
+            "database": database,
+            "user": user,
+            "password": password,
+            "charset": "utf8mb4",
+            "cursorclass": pymysql.cursors.DictCursor,
+        }
+        self.table_prefix = table_prefix
 
-    def _connect(self) -> None:
         try:
-            connection_string = (
-                f"mysql+pymysql://{settings.glpi_db_user}:{settings.glpi_db_password}"
-                f"@{settings.glpi_db_host}:{settings.glpi_db_port}/{settings.glpi_db_name}"
-                f"?charset=utf8mb4"
-            )
-
-            self._engine = create_engine(
-                connection_string,
-                pool_size=5,
-                max_overflow=10,
-                pool_timeout=30,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                echo=False,
-            )
-
-            with self._engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-
-            logger.info(f"Conectado ao GLPI em {settings.glpi_db_host}")
-
+            with self._get_connection() as conn:
+                logger.info(f"GLPIClient conectado ao database: {database}")
         except Exception as e:
-            logger.error(f"Erro ao conectar no GLPI: {e}")
+            logger.error(f"Erro ao conectar ao GLPI")
             raise
+    
+    @contextmanager
+    def _get_connection(self):
+        conn = pymysql.connect(**self.config)
+        try:
+            yield conn
+        finally:
+            conn.close()
+    
+    def fetch_knowledge_base_articles(
+        self,
+        limit: Optional[int] = None,
+        min_content_length: int = 50,
+    ) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
 
-    @retry_database_operation(max_attempts=3)
+            query = f"""
+                SELECT
+                    kb.id,
+                    kb.name as title,
+                    kb.answer as content,
+                    kb.date_creation,
+                    kb.date_mod,
+                    kb.users_id as author_id,
+                    kb.view as view_count,
+                    kbt.language
+                FROM {self.table_prefix}knowbaseitems kb
+                LEFT JOIN {self.table_prefix}knowbaseitemtranslations kbt
+                    ON kb.id = kbt.knowbaseitems_id
+                WHERE kb.is_faq = 0
+                    AND LENGTH(kb.answer) >= %s
+                ORDER BY kb.date_mod DESC
+            """
+
+            params = [min_content_length]
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, tuple(params))
+            articles = cur.fetchall()
+
+            logger.info(f"Buscados {len(articles)} artigos do GLPI")
+
+            return articles
+    
+    def fetch_faq_items(
+        self,
+        limit: Optional[int] = None,
+        min_content_length: int = 50,
+    ) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+
+            query = f"""
+                SELECT
+                    kb.id,
+                    kb.name as title,
+                    kb.answer as content,
+                    kb.date_creation,
+                    kb.date_mod,
+                    kb.users_id as author_id,
+                    kb.view as view_count
+                FROM {self.table_prefix}knowbaseitems kb
+                WHERE kb.is_faq = 1
+                    AND LENGTH(kb.answer) >= %s
+                ORDER BY kb.view DESC, kb.date_mod DESC
+            """
+
+            params = [min_content_length]
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, tuple(params))
+            faqs = cur.fetchall()
+
+            logger.info(f"Buscados {len(faqs)} FAQs do GLPI")
+
+            return faqs
+
     def get_all_articles(
         self,
         include_private: bool = False,
-        min_content_length: int | None = None,
+        min_content_length: int = 50,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        min_length = min_content_length or settings.glpi_min_content_length
+        kb_articles = self.fetch_knowledge_base_articles(
+            limit=None,
+            min_content_length=min_content_length
+        )
 
-        logger.info("Extraindo artigos do GLPI...")
+        faq_items = self.fetch_faq_items(
+            limit=None,
+            min_content_length=min_content_length
+        )
 
-        query = f"""
-            SELECT 
-                kb.id,
-                kb.name AS title,
-                kb.answer AS content,
-                kb.date_creation,
-                kb.date_mod,
-                kb.is_faq,
-                kb.view,
-                kbc.completename AS category,
-                kbc.id AS category_id
-            FROM {self.prefix}knowbaseitems AS kb
-            LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
-                ON kb.id = kbrel.knowbaseitems_id
-            LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
-                ON kbrel.knowbaseitemcategories_id = kbc.id
-            WHERE 1=1
-        """
+        all_articles = []
 
-        if not include_private:
-            query += " AND kb.view > 0"
+        for article in kb_articles:
+            article['metadata'] = {
+                'is_faq': False,
+                'date_creation': article.get('date_creation'),
+                'date_mod': article.get('date_mod'),
+                'author': article.get('author_id'),
+                'visibility': 'public',
+            }
+            all_articles.append(article)
 
-        query += " ORDER BY kb.date_mod DESC"
+        for faq in faq_items:
+            faq['metadata'] = {
+                'is_faq': True,
+                'date_creation': faq.get('date_creation'),
+                'date_mod': faq.get('date_mod'),
+                'author': faq.get('author_id'),
+                'visibility': 'public',
+            }
+            all_articles.append(faq)
 
-        try:
-            with self._engine.connect() as conn:
-                result = conn.execute(text(query))
-                rows = result.fetchall()
+        all_articles.sort(key=lambda x: x.get('date_mod', ''), reverse=True)
 
-            logger.info(f"Encontrados {len(rows)} artigos no GLPI")
+        if limit:
+            all_articles = all_articles[:limit]
 
-            articles: List[Dict[str, Any]] = []
-            skipped = 0
+        logger.info(f"Total articles retrieved: {len(all_articles)} (KB: {len(kb_articles)}, FAQ: {len(faq_items)})")
 
-            for row in rows:
-                article_dict = dict(row._mapping)
-                clean_content = self._clean_html(article_dict.get("content") or "")
+        return all_articles
 
-                if len(clean_content) < min_length:
-                    logger.debug(
-                        f"Artigo '{article_dict.get('title')}' muito curto ({len(clean_content)} chars), ignorando"
-                    )
-                    skipped += 1
-                    continue
+    def fetch_tickets_for_training(
+        self,
+        limit: Optional[int] = None,
+        status: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
 
-                articles.append(
-                    {
-                        "id": str(article_dict["id"]),
-                        "title": article_dict.get("title") or "Sem título",
-                        "content": clean_content,
-                        "category": article_dict.get("category") or "Geral",
-                        "metadata": {
-                            "glpi_id": article_dict["id"],
-                            "category_id": article_dict.get("category_id"),
-                            "is_faq": bool(article_dict.get("is_faq")),
-                            "date_creation": str(article_dict.get("date_creation")),
-                            "date_mod": str(article_dict.get("date_mod")),
-                            "source": "GLPI",
-                            "visibility": "public" if article_dict.get("view", 0) > 0 else "private",
-                        },
-                    }
-                )
+            if status is None:
+                status = [5, 6]
 
-            logger.info(f"{len(articles)} artigos válidos extraídos ({skipped} ignorados)")
-            return articles
+            status_placeholders = ",".join(["%s"] * len(status))
 
-        except Exception as e:
-            logger.error(f"Erro ao extrair artigos: {e}")
-            raise
+            query = f"""
+                SELECT
+                    t.id,
+                    t.name as title,
+                    t.content as description,
+                    ts.content as solution,
+                    t.date as created_at,
+                    t.solvedate as solved_at,
+                    t.status,
+                    t.urgency,
+                    t.impact,
+                    t.priority,
+                    c.name as category
+                FROM {self.table_prefix}tickets t
+                LEFT JOIN {self.table_prefix}ticketsolutions ts
+                    ON t.id = ts.tickets_id
+                LEFT JOIN {self.table_prefix}itilcategories c
+                    ON t.itilcategories_id = c.id
+                WHERE t.status IN ({status_placeholders})
+                    AND ts.content IS NOT NULL
+                    AND LENGTH(ts.content) >= 50
+                ORDER BY t.solvedate DESC
+            """
 
-    def get_article_by_id(self, article_id: int) -> Optional[Dict[str, Any]]:
-        query = f"""
-            SELECT 
-                kb.id,
-                kb.name AS title,
-                kb.answer AS content,
-                kbc.completename AS category
-            FROM {self.prefix}knowbaseitems AS kb
-            LEFT JOIN {self.prefix}knowbaseitems_knowbaseitemcategories AS kbrel 
-                ON kb.id = kbrel.knowbaseitems_id
-            LEFT JOIN {self.prefix}knowbaseitemcategories AS kbc 
-                ON kbrel.knowbaseitemcategories_id = kbc.id
-            WHERE kb.id = :article_id
-        """
-        try:
-            with self._engine.connect() as conn:
-                result = conn.execute(text(query), {"article_id": article_id})
-                row = result.fetchone()
-                if not row:
-                    return None
-                data = dict(row._mapping)
-                return {
-                    "id": str(data["id"]),
-                    "title": data.get("title") or "Sem título",
-                    "content": self._clean_html(data.get("content") or ""),
-                    "category": data.get("category") or "Geral",
-                }
-        except Exception as e:
-            logger.error(f"Erro ao buscar artigo {article_id}: {e}")
-            return None
+            params = list(status)
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
 
-    def get_categories(self) -> List[Dict[str, Any]]:
-        query = f"""
-        SELECT 
-            id,
-            name,
-            completename,
-            level,
-            knowbaseitemcategories_id AS parent_id
-        FROM {self.prefix}knowbaseitemcategories
-        ORDER BY completename
-        """
+            cur.execute(query, tuple(params))
+            tickets = cur.fetchall()
 
-        try:
-            with self._engine.connect() as conn:
-                result = conn.execute(text(query))
-                rows = result.fetchall()
+            logger.info(f"Buscados {len(tickets)} tickets resolvidos do GLPI")
 
-            categories = [dict(row._mapping) for row in rows]
-            logger.info(f"Encontradas {len(categories)} categorias")
+            return tickets
+    
+    def fetch_categories(self) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            
+            query = f"""
+                SELECT 
+                    id,
+                    name,
+                    comment as description,
+                    level,
+                    itilcategories_id as parent_id
+                FROM {self.table_prefix}itilcategories
+                ORDER BY level, name
+            """
+            
+            cur.execute(query)
+            categories = cur.fetchall()
+            
+            logger.info(f"Buscadas {len(categories)} categorias do GLPI")
+            
             return categories
-
-        except Exception as e:
-            logger.error(f"Erro ao buscar categorias: {e}")
-            return []
-
-    def get_stats(self) -> Dict[str, Any]:
-        queries = {
-            "total_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems",
-            "public_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE view > 0",
-            "faq_articles": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitems WHERE is_faq = 1",
-            "total_categories": f"SELECT COUNT(*) as count FROM {self.prefix}knowbaseitemcategories",
-        }
-
-        stats: Dict[str, Any] = {}
+    
+    def get_article_by_id(self, article_id: int) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            
+            query = f"""
+                SELECT 
+                    kb.id,
+                    kb.name as title,
+                    kb.answer as content,
+                    kb.date_creation,
+                    kb.date_mod,
+                    kb.users_id as author_id,
+                    kb.view as view_count,
+                    kb.is_faq
+                FROM {self.table_prefix}knowbaseitems kb
+                WHERE kb.id = %s
+            """
+            
+            cur.execute(query, (article_id,))
+            article = cur.fetchone()
+            
+            return article
+    
+    def increment_article_view(self, article_id: int) -> bool:
         try:
-            with self._engine.connect() as conn:
-                for key, q in queries.items():
-                    result = conn.execute(text(q))
-                    stats[key] = result.fetchone()[0]
-            return stats
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                
+                query = f"""
+                    UPDATE {self.table_prefix}knowbaseitems
+                    SET view = view + 1
+                    WHERE id = %s
+                """
+                
+                cur.execute(query, (article_id,))
+                conn.commit()
+                
+                return cur.rowcount > 0
+                
         except Exception as e:
-            logger.error(f"Erro ao buscar estatísticas: {e}")
-            return {}
-
-    @staticmethod
-    def _clean_html(html_content: str) -> str:
-        if not html_content:
-            return ""
-
-        try:
-            from bs4 import BeautifulSoup
-
-            soup = BeautifulSoup(unescape(html_content), "html.parser")
-
-            for tag in soup(["script", "style", "meta", "link"]):
-                tag.decompose()
-
-            # Listas -> uma linha por item com "- "
-            for ul in soup.find_all(["ul", "ol"]):
-                for li in ul.find_all("li"):
-                    li.insert(0, "- ")
-                    li.append("\n")
-
-            # Cabeçalhos: quebra de linha e dois pontos
-            for i in range(1, 7):
-                for h in soup.find_all(f"h{i}"):
-                    h.insert(0, "\n")
-                    h.append(":\n")
-
-            for p in soup.find_all("p"):
-                p.append("\n\n")
-
-            for div in soup.find_all("div"):
-                div.append("\n")
-
-            for br in soup.find_all("br"):
-                br.replace_with("\n")
-
-            text = soup.get_text()
-
-        except Exception:
-            logger.debug("BeautifulSoup não disponível, usando limpeza básica")
-            text = unescape(html_content)
-            text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-            text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
-            text = re.sub(r"<li>", "\n- ", text, flags=re.IGNORECASE)
-            text = re.sub(r"<[^>]+>", "", text)
-
-        text = unescape(text)
-        text = re.sub(r" +", " ", text)
-        text = re.sub(r"\n\n\n+", "\n\n", text)
-        text = re.sub(r"\n ", "\n", text)
-        return text.strip()
-
-    def test_connection(self) -> bool:
-        try:
-            with self._engine.connect() as conn:
-                result = conn.execute(text("SELECT VERSION()"))
-                version = result.fetchone()[0]
-                logger.info(f"Conexão OK - MySQL/MariaDB versão: {version}")
-                return True
-        except Exception as e:
-            logger.error(f"Falha na conexão: {e}")
+            logger.error(f"Erro ao incrementar visualização: {e}")
             return False
-
-    def close(self):
-        if self._engine:
-            self._engine.dispose()
-            logger.info("Conexão com GLPI fechada")
-
-
-glpi_service = GLPIService()
-
+    
+    def search_articles(
+        self,
+        search_term: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            
+            search_pattern = f"%{search_term}%"
+            
+            query = f"""
+                SELECT 
+                    kb.id,
+                    kb.name as title,
+                    kb.answer as content,
+                    kb.date_creation,
+                    kb.date_mod,
+                    kb.view as view_count
+                FROM {self.table_prefix}knowbaseitems kb
+                WHERE kb.name LIKE %s
+                    OR kb.answer LIKE %s
+                ORDER BY kb.view DESC, kb.date_mod DESC
+                LIMIT %s
+            """
+            
+            cur.execute(query, (search_pattern, search_pattern, limit))
+            articles = cur.fetchall()
+            
+            logger.info(
+                f"Buscados {len(articles)} artigos para termo '{search_term}'"
+            )
+            
+            return articles
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            
+            stats = {}
+            
+            cur.execute(
+                f"SELECT COUNT(*) as count FROM {self.table_prefix}knowbaseitems WHERE is_faq=0"
+            )
+            stats["total_articles"] = cur.fetchone()["count"]
+            
+            cur.execute(
+                f"SELECT COUNT(*) as count FROM {self.table_prefix}knowbaseitems WHERE is_faq=1"
+            )
+            stats["total_faqs"] = cur.fetchone()["count"]
+            
+            cur.execute(
+                f"SELECT COUNT(*) as count FROM {self.table_prefix}tickets"
+            )
+            stats["total_tickets"] = cur.fetchone()["count"]
+            
+            cur.execute(
+                f"SELECT COUNT(*) as count FROM {self.table_prefix}tickets WHERE status IN (5, 6)"
+            )
+            stats["solved_tickets"] = cur.fetchone()["count"]
+            
+            cur.execute(
+                f"SELECT COUNT(*) as count FROM {self.table_prefix}itilcategories"
+            )
+            stats["total_categories"] = cur.fetchone()["count"]
+            
+            logger.info(f"Estatísticas GLPI: {stats}")
+            
+            return stats

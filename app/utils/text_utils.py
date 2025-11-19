@@ -6,9 +6,6 @@ from bs4 import BeautifulSoup
 
 
 def normalize_text(text: str) -> str:
-    """
-    Normaliza texto removendo acentos e convertendo para lowercase.
-    """
     if not text:
         return ""
 
@@ -18,10 +15,6 @@ def normalize_text(text: str) -> str:
 
 
 def clean_markdown(markdown_text: str) -> str:
-    """
-    Limpa e padroniza markdown gerado pelo LLM.
-    Remove inconsistências e normaliza formatação.
-    """
     if not markdown_text:
         return ""
 
@@ -48,9 +41,6 @@ def clean_markdown(markdown_text: str) -> str:
 
 
 def markdown_to_html(markdown_text: str) -> str:
-    """
-    Converte markdown para HTML bem formatado e seguro.
-    """
     if not markdown_text:
         return ""
 
@@ -86,9 +76,6 @@ def markdown_to_html(markdown_text: str) -> str:
 
 
 def markdown_to_plain_text(markdown_text: str) -> str:
-    """
-    Converte markdown para texto puro, removendo toda formatação.
-    """
     if not markdown_text:
         return ""
 
@@ -120,12 +107,6 @@ def markdown_to_plain_text(markdown_text: str) -> str:
 
 
 def process_answer_formats(markdown_answer: str) -> Tuple[str, str, str]:
-    """
-    Processa resposta e retorna em 3 formatos: markdown limpo, HTML, texto puro.
-
-    Returns:
-        Tuple[str, str, str]: (markdown, html, plain_text)
-    """
     cleaned_md = clean_markdown(markdown_answer)
     html = markdown_to_html(cleaned_md)
     plain = markdown_to_plain_text(cleaned_md)

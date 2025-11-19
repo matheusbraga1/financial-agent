@@ -1,111 +1,62 @@
-"""Schema de metadados para documentos multi-domínio."""
-
-from enum import Enum
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional, List
 from datetime import datetime
 
-
-class Department(str, Enum):
-    """Departamentos/Setores da empresa."""
-    TI = "TI"
-    RH = "RH"
-    FINANCEIRO = "Financeiro"
-    LOTEAMENTO = "Loteamento"
-    ALUGUEL = "Aluguel"
-    JURIDICO = "Jurídico"
-    GERAL = "Geral"
-
-
-class DocType(str, Enum):
-    """Tipos de documento."""
-    ARTICLE = "article"  # Artigos GLPI
-    CONTRACT = "contract"  # Contratos
-    POLICY = "policy"  # Políticas corporativas
-    PROCEDURE = "procedure"  # Procedimentos operacionais
-    FORM = "form"  # Formulários
-    MANUAL = "manual"  # Manuais técnicos
-    FAQ = "faq"  # Perguntas frequentes
-    GUIDE = "guide"  # Guias e tutoriais
-
-
-class DocumentMetadata(BaseModel):
-    """Metadados completos de um documento."""
-
-    # Identificação
-    source_id: str = Field(..., description="ID único do documento")
-    title: str = Field(..., description="Título do documento")
-
-    # Classificação
-    department: Department = Field(..., description="Departamento responsável")
-    doc_type: DocType = Field(..., description="Tipo de documento")
-    category: Optional[str] = Field(None, description="Subcategoria dentro do departamento")
-
-    # Metadata adicional
-    tags: List[str] = Field(default_factory=list, description="Tags para busca")
-    file_format: str = Field(default="html", description="Formato do arquivo original")
-
-    # Controle
-    created_at: Optional[str] = Field(None, description="Data de criação ISO format")
-    updated_at: Optional[str] = Field(None, description="Data de última atualização")
-    author: Optional[str] = Field(None, description="Autor do documento")
-
-    # Versionamento
-    version: str = Field(default="1.0", description="Versão do documento")
-
-    # Para artigos GLPI (compatibilidade com sistema atual)
-    glpi_id: Optional[int] = Field(None, description="ID no GLPI (se aplicável)")
-    is_public: bool = Field(default=True, description="Se o artigo é público no GLPI")
-
-    class Config:
-        use_enum_values = True
-
-
-class ChunkMetadata(BaseModel):
-    """Metadados de um chunk de documento (para Qdrant)."""
-
-    # Herda todos os campos do documento pai
-    source_id: str
-    title: str
-    department: str  # Usar string para facilitar serialização JSON
-    doc_type: str
-    category: Optional[str] = None
-    tags: List[str] = []
-    file_format: str = "html"
-    created_at: Optional[str] = None
+@dataclass(frozen=True)
+class DocumentMetadata:
+    department: Optional[str] = None
+    doc_type: Optional[str] = None
+    tags: tuple = ()
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     author: Optional[str] = None
-
-    # Específico do chunk
-    chunk_index: int = Field(..., description="Índice do chunk no documento")
-    total_chunks: int = Field(..., description="Total de chunks do documento")
-    text: str = Field(..., description="Texto do chunk")
-
-    # GLPI compatibility
-    glpi_id: Optional[int] = None
-    is_public: bool = True
-
+    language: str = "pt-BR"
+    
+    def __post_init__(self):
+        if isinstance(self.tags, list):
+            object.__setattr__(self, 'tags', tuple(self.tags))
+        
+        valid_departments = ["TI", "RH", "Financeiro", "Geral", None]
+        if self.department and self.department not in valid_departments:
+            raise ValueError(f"Departamento inválido: {self.department}")
+        
+        valid_types = ["manual", "policy", "faq", "tutorial", "qa_memory", None]
+        if self.doc_type and self.doc_type not in valid_types:
+            raise ValueError(f"Tipo de documento inválido: {self.doc_type}")
+    
+    def to_dict(self) -> dict:
+        return {
+            "department": self.department,
+            "doc_type": self.doc_type,
+            "tags": list(self.tags),
+            "source_id": self.source_id,
+            "source_url": self.source_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "author": self.author,
+            "language": self.language,
+        }
+    
     @classmethod
-    def from_document_metadata(
-        cls,
-        doc_metadata: DocumentMetadata,
-        chunk_index: int,
-        total_chunks: int,
-        text: str
-    ) -> "ChunkMetadata":
-        """Cria ChunkMetadata a partir de DocumentMetadata."""
+    def from_dict(cls, data: dict) -> "DocumentMetadata":
+        created_at = data.get("created_at")
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        
+        updated_at = data.get("updated_at")
+        if isinstance(updated_at, str):
+            updated_at = datetime.fromisoformat(updated_at)
+        
         return cls(
-            source_id=doc_metadata.source_id,
-            title=doc_metadata.title,
-            department=doc_metadata.department,
-            doc_type=doc_metadata.doc_type,
-            category=doc_metadata.category,
-            tags=doc_metadata.tags,
-            file_format=doc_metadata.file_format,
-            created_at=doc_metadata.created_at,
-            author=doc_metadata.author,
-            chunk_index=chunk_index,
-            total_chunks=total_chunks,
-            text=text,
-            glpi_id=doc_metadata.glpi_id,
-            is_public=doc_metadata.is_public
+            department=data.get("department"),
+            doc_type=data.get("doc_type"),
+            tags=tuple(data.get("tags", [])),
+            source_id=data.get("source_id"),
+            source_url=data.get("source_url"),
+            created_at=created_at,
+            updated_at=updated_at,
+            author=data.get("author"),
+            language=data.get("language", "pt-BR"),
         )
