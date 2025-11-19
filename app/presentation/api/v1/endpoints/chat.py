@@ -1,6 +1,7 @@
 import logging
 import json
 import hashlib
+import threading
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -195,6 +196,9 @@ async def chat_stream(
         authenticated=current_user is not None
     )
     
+    # Flag para sinalizar cancelamento quando cliente desconectar
+    cancel_event = threading.Event()
+
     async def generate():
         try:
             if not request.question or len(request.question.strip()) < 3:
@@ -251,6 +255,7 @@ async def chat_stream(
             async for chunk in stream_answer_uc.execute(
                 question=request.question,
                 history=history if current_user else None,
+                cancel_event=cancel_event,
             ):
                 if isinstance(chunk, tuple):
                     chunk_type, chunk_data = chunk
@@ -289,6 +294,11 @@ async def chat_stream(
                         error=error_message
                     )
                     yield f"data: {json.dumps({'type': 'error', 'data': {'message': error_message}}, ensure_ascii=False)}\n\n"
+
+                elif chunk_type == "_cancelled":
+                    structured_logger.info("Stream cancelado - encerrando conexão")
+                    # Não envia mais nada ao cliente (já desconectou)
+                    return
 
             if current_user and full_answer:
                 try:
@@ -349,6 +359,15 @@ async def chat_stream(
                 confidence=round(confidence, 2)
             )
 
+        except GeneratorExit:
+            # Cliente desconectou - sinaliza cancelamento para thread LLM
+            structured_logger.info(
+                "Cliente desconectou - cancelando stream",
+                session_id=session_id if 'session_id' in locals() else None
+            )
+            cancel_event.set()
+            raise
+
         except Exception as e:
             structured_logger.error(
                 "Erro durante streaming",
@@ -357,6 +376,10 @@ async def chat_stream(
             )
             yield f"data: {json.dumps({'type': 'error', 'data': {'message': 'Erro ao processar sua pergunta.'}}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        finally:
+            # Garante que o cancel_event seja sempre setado para cleanup
+            cancel_event.set()
 
     return StreamingResponse(
         generate(),

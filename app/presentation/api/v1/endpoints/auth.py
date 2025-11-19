@@ -46,9 +46,13 @@ router = APIRouter()
     },
 )
 async def register(
-    request: RegisterRequest,
+    request_data: RegisterRequest,
     user_repo = Depends(get_user_repository),
+    http_request: Request = None,
 ) -> ApiResponse[UserResponse]:
+    # Apply rate limiting: 5 requests per minute for registration
+    limiter = http_request.app.state.limiter
+    await limiter.check_request_limit(http_request, "5/minute")
     try:
         structured_logger = get_structured_logger()
         structured_logger.info(
@@ -374,6 +378,7 @@ async def logout(
         structured_logger = get_structured_logger()
         structured_logger.info("Logout iniciado", user_id=current_user["id"])
 
+        # Revoke access token via blacklist
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -389,6 +394,21 @@ async def logout(
                     "Falha ao revogar access token",
                     user_id=current_user["id"]
                 )
+
+        # Delete all refresh tokens for the user (invalidate all sessions)
+        try:
+            deleted_count = user_repo.delete_all_user_refresh_tokens(
+                user_id=current_user["id"]
+            )
+            structured_logger.info(
+                "Refresh tokens deletados",
+                user_id=current_user["id"],
+                count=deleted_count
+            )
+        except Exception as e:
+            logger.warning(
+                f"Falha ao deletar refresh tokens do usuário {current_user['id']}: {e}"
+            )
 
         structured_logger.info("Logout processado", user_id=current_user["id"])
 

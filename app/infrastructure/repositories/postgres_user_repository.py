@@ -356,6 +356,33 @@ class PostgresUserRepository:
 
                 return cur.rowcount > 0
 
+    def delete_all_user_refresh_tokens(self, user_id: int) -> int:
+        """
+        Delete all refresh tokens for a specific user.
+        Used during logout to invalidate all sessions.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Number of tokens deleted
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM refresh_tokens WHERE user_id = %s",
+                    (user_id,)
+                )
+
+                deleted_count = cur.rowcount
+
+                if deleted_count > 0:
+                    logger.info(
+                        f"Deleted {deleted_count} refresh token(s) for user_id={user_id}"
+                    )
+
+                return deleted_count
+
     def delete_expired_tokens(self) -> int:
         """
         Delete all expired refresh tokens using helper function.

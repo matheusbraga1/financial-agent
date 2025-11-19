@@ -72,12 +72,8 @@ class JWTHandler:
 
         token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
-        if self.redis_client:
-            self.redis_client.setex(
-                f"refresh_token:{jti}",
-                self.refresh_expire,
-                user_id
-            )
+        # Note: Refresh tokens are stored in PostgreSQL, not Redis
+        # Redis is only used for access token blacklist
 
         return token, jti
 
@@ -117,9 +113,8 @@ class JWTHandler:
         if not token_data or token_data.type != "refresh":
             return None
 
-        if self.redis_client:
-            if not self.redis_client.exists(f"refresh_token:{token_data.jti}"):
-                return None
+        # Note: Refresh token validation is done in PostgreSQL by the repository layer
+        # This method only validates the JWT signature and expiration
 
         return self.create_access_token(
             user_id=token_data.sub,

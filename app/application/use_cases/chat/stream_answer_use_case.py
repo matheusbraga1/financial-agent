@@ -30,6 +30,7 @@ class StreamAnswerUseCase:
         self,
         question: str,
         history: Optional[List[Dict[str, Any]]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> AsyncIterator[Tuple[str, Any]]:
         if not question or not question.strip():
             yield ("_error", "Pergunta não pode estar vazia")
@@ -137,24 +138,36 @@ class StreamAnswerUseCase:
             def _producer():
                 try:
                     for token in self.llm.stream(prompt):
+                        # Verifica se o stream foi cancelado
+                        if cancel_event and cancel_event.is_set():
+                            logger.info("Stream cancelado pelo cliente - parando geração LLM")
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put(("_cancelled", None)),
+                                loop
+                            )
+                            return
+
                         if token:
                             asyncio.run_coroutine_threadsafe(
                                 queue.put(("token", token)),
                                 loop
                             )
                             full_answer_parts.append(token)
-                    
+
                     asyncio.run_coroutine_threadsafe(
                         queue.put(("_done", None)),
                         loop
                     )
-                    
+
                 except Exception as e:
-                    logger.error("Erro no streaming do LLM", exc_info=True)
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put(("_error", str(e))),
-                        loop
-                    )
+                    if cancel_event and cancel_event.is_set():
+                        logger.debug("Erro após cancelamento - ignorando")
+                    else:
+                        logger.error("Erro no streaming do LLM", exc_info=True)
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(("_error", str(e))),
+                            loop
+                        )
             
             producer_thread = threading.Thread(
                 target=_producer,
@@ -167,8 +180,8 @@ class StreamAnswerUseCase:
             while True:
                 kind, data = await queue.get()
                 yield (kind, data)
-                
-                if kind in ("_done", "_error"):
+
+                if kind in ("_done", "_error", "_cancelled"):
                     break
             
             if full_answer_parts:
