@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     password_hash_iterations_dev: int = 50_000
 
     glpi_db_host: str = "localhost"
-    glpi_db_port: int = 3306
+    glpi_db_port: int = 3307
     glpi_db_name: str = "glpi"
     glpi_db_user: str = "glpi"
     glpi_db_password: str = Field(
@@ -142,7 +142,7 @@ class Settings(BaseSettings):
 
     # PostgreSQL configuration
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 5433
     postgres_database: str = "financial_agent"
     postgres_user: str = "postgres"
     postgres_password: str = Field(

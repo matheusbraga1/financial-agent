@@ -221,7 +221,7 @@ def get_cross_encoder_reranker() -> Optional[CrossEncoderReranker]:
     try:
         logger.info("Inicializando CrossEncoderReranker (singleton)")
         return CrossEncoderReranker(
-            model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            model_name=settings.cross_encoder_model,
             device="cpu",
         )
     except Exception as e:
@@ -231,11 +231,12 @@ def get_cross_encoder_reranker() -> Optional[CrossEncoderReranker]:
 
 @lru_cache()
 def get_hybrid_search_strategy() -> HybridSearchStrategy:
+    settings = get_settings()
     logger.debug("Criando HybridSearchStrategy")
     return HybridSearchStrategy(
-        vector_weight=0.7,
-        text_weight=0.3,
-        rrf_k=60,
+        vector_weight=settings.hybrid_vector_weight,
+        text_weight=settings.hybrid_text_weight,
+        rrf_k=settings.hybrid_rrf_k,
     )
 
 def get_clarifier(
