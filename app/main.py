@@ -3,14 +3,13 @@ from typing import Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.infrastructure.config.settings import get_settings
 from app.presentation.api.v1.router import api_router
 from app.presentation.api.middleware.logging_middleware import LoggingMiddleware
 from app.presentation.api.health import health_router
+from app.presentation.api.rate_limiter import limiter
 
 from app.presentation.api.middleware import (
     SecurityHeadersMiddleware,
@@ -61,28 +60,17 @@ def create_application() -> FastAPI:
     _add_utility_endpoints(app)
     return app
 
-def get_real_client_ip(request: Request) -> str:
-    if x_forwarded_for := request.headers.get("X-Forwarded-For"):
-        return x_forwarded_for.split(",")[0].strip()
-
-    if x_real_ip := request.headers.get("X-Real-IP"):
-        return x_real_ip.strip()
-
-    return get_remote_address(request)
-
-
 def _configure_rate_limiting(app: FastAPI) -> None:
-    limiter = Limiter(
-        key_func=get_real_client_ip,
-        default_limits=["50/minute"],
-    )
-
+    """Configure rate limiting for the application."""
     app.state.limiter = limiter
 
     app.add_middleware(SlowAPIMiddleware)
 
     logger.info("✓ Rate limiting configured: 50 requests/minute per IP (considers X-Forwarded-For)")
-    logger.info("  → Login endpoints: 5/minute")
+    logger.info("  → Register endpoint: 5/minute")
+    logger.info("  → Login endpoint: 5/minute")
+    logger.info("  → Refresh endpoint: 10/minute")
+    logger.info("  → Logout endpoint: 20/minute")
     logger.info("  → Chat endpoints: 30/minute")
     logger.info("  → Other endpoints: 50/minute (default)")
 
