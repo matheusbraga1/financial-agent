@@ -143,23 +143,11 @@ class DocumentRetriever:
         self,
         documents: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Aplica boost de recência aos documentos.
-
-        Delegado para RecencyBoostCalculator utilitário (evita duplicação).
-
-        Args:
-            documents: Lista de documentos
-
-        Returns:
-            Documentos com boost aplicado e reordenados
-        """
         if not documents or len(documents) < 2:
             return documents
 
-        # Delega para utilitário centralizado
         boosted_docs = RecencyBoostCalculator.apply_to_documents(documents)
 
-        # Log top 3 se houve mudanças
         if any(d.get("recency_boost", 0) > 0.05 for d in boosted_docs[:3]):
             logger.info("Boost de recência aplicado - top 3:")
             for i, doc in enumerate(boosted_docs[:3]):
@@ -198,16 +186,4 @@ class DocumentRetriever:
         content: Optional[str],
         metadata: Dict[str, Any]
     ) -> str:
-        """Constrói snippet formatado do documento.
-
-        Delegado para SnippetBuilder utilitário (evita duplicação).
-
-        Args:
-            title: Título do documento
-            content: Conteúdo do documento
-            metadata: Metadados do documento
-
-        Returns:
-            Snippet formatado
-        """
         return SnippetBuilder.build(title, content, metadata)

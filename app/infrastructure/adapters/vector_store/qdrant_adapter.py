@@ -1,15 +1,3 @@
-"""Qdrant vector database adapter.
-
-This adapter handles only Qdrant-specific operations:
-- Connection management
-- Collection setup
-- Point insertion/retrieval
-- Basic vector and text search
-- Metadata updates
-
-Business logic (scoring, reranking, diversification) is handled elsewhere.
-"""
-
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -33,8 +21,6 @@ settings = get_settings()
 
 
 class QdrantAdapter:
-    """Pure Qdrant operations adapter without business logic."""
-
     def __init__(
         self,
         host: Optional[str] = None,
@@ -42,14 +28,6 @@ class QdrantAdapter:
         collection_name: Optional[str] = None,
         vector_size: Optional[int] = None,
     ):
-        """Initialize Qdrant client.
-
-        Args:
-            host: Qdrant host (defaults to settings)
-            port: Qdrant port (defaults to settings)
-            collection_name: Collection name (defaults to settings)
-            vector_size: Vector dimension (defaults to settings)
-        """
         self.host = host or settings.qdrant_host
         self.port = port or settings.qdrant_port
         self.collection_name = collection_name or settings.qdrant_collection
@@ -66,12 +44,6 @@ class QdrantAdapter:
         logger.info(f"Qdrant adapter initialized for collection '{self.collection_name}'")
 
     def ensure_collection(self) -> None:
-        """Create collection if it doesn't exist.
-
-        Creates:
-        - Vector index with cosine distance
-        - Text index for BM25/lexical search
-        """
         try:
             collections = self.client.get_collections().collections
             exists = any(col.name == self.collection_name for col in collections)
@@ -87,7 +59,6 @@ class QdrantAdapter:
                     ),
                 )
 
-                # Create text index for BM25 search
                 self.client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="search_text",
@@ -114,13 +85,6 @@ class QdrantAdapter:
         vector: List[float],
         payload: Dict[str, Any],
     ) -> None:
-        """Insert or update a single point.
-
-        Args:
-            point_id: Unique point identifier
-            vector: Embedding vector
-            payload: Point metadata
-        """
         point = PointStruct(
             id=point_id,
             vector=vector,
@@ -135,11 +99,6 @@ class QdrantAdapter:
         logger.debug(f"Point upserted: {point_id}")
 
     def upsert_points(self, points: List[PointStruct]) -> None:
-        """Batch insert/update points.
-
-        Args:
-            points: List of PointStruct objects
-        """
         if not points:
             return
 
@@ -156,16 +115,6 @@ class QdrantAdapter:
         limit: int = 10,
         score_threshold: Optional[float] = None,
     ) -> List[Any]:
-        """Perform pure vector similarity search.
-
-        Args:
-            query_vector: Query embedding
-            limit: Maximum results
-            score_threshold: Minimum similarity score
-
-        Returns:
-            List of Qdrant ScoredPoint objects
-        """
         try:
             self.ensure_collection()
 
@@ -189,15 +138,6 @@ class QdrantAdapter:
         query_text: str,
         limit: int = 10,
     ) -> List[Any]:
-        """Perform BM25 text search.
-
-        Args:
-            query_text: Query text
-            limit: Maximum results
-
-        Returns:
-            List of Qdrant Record objects
-        """
         try:
             self.ensure_collection()
 
@@ -231,31 +171,17 @@ class QdrantAdapter:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Perform hybrid search combining vector and text search.
-
-        Args:
-            query_text: Query text for BM25 search
-            query_vector: Query embedding for vector search
-            limit: Maximum results
-            score_threshold: Minimum similarity score (for vector search)
-            filter: Optional metadata filters
-
-        Returns:
-            List of documents with scores (dicts with 'id', 'score', 'title', 'content', etc.)
-        """
         try:
             self.ensure_collection()
 
-            # Perform vector search
             vector_results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
-                limit=limit * 2,  # Get more results for hybrid fusion
+                limit=limit * 2,
                 score_threshold=score_threshold if score_threshold else 0.0,
                 with_payload=True,
             )
 
-            # Convert to dict format expected by DocumentRetriever
             documents = []
             for result in vector_results:
                 payload = result.payload or {}
@@ -289,16 +215,6 @@ class QdrantAdapter:
         with_payload: bool = True,
         with_vectors: bool = False,
     ) -> List[Any]:
-        """Retrieve points by IDs.
-
-        Args:
-            ids: List of point IDs
-            with_payload: Include payload in results
-            with_vectors: Include vectors in results
-
-        Returns:
-            List of Qdrant Record objects
-        """
         if not ids:
             return []
 
@@ -320,12 +236,6 @@ class QdrantAdapter:
         point_ids: List[str],
         payload: Dict[str, Any],
     ) -> None:
-        """Update payload for multiple points.
-
-        Args:
-            point_ids: List of point IDs to update
-            payload: Payload fields to update
-        """
         if not point_ids or not payload:
             return
 
@@ -341,11 +251,6 @@ class QdrantAdapter:
             logger.debug(f"Failed to update payload: {e}")
 
     def increment_usage(self, point_ids: List[str]) -> None:
-        """Increment usage count for documents.
-
-        Args:
-            point_ids: List of document IDs
-        """
         if not point_ids:
             return
 
@@ -356,7 +261,6 @@ class QdrantAdapter:
         timestamp = datetime.utcnow().isoformat()
 
         try:
-            # Process in batches
             for i in range(0, len(unique_ids), 64):
                 batch = unique_ids[i:i+64]
 
@@ -384,12 +288,6 @@ class QdrantAdapter:
         point_ids: List[str],
         helpful: bool,
     ) -> None:
-        """Record user feedback on documents.
-
-        Args:
-            point_ids: List of document IDs
-            helpful: True for helpful, False for complaint
-        """
         if not point_ids:
             return
 
@@ -400,7 +298,6 @@ class QdrantAdapter:
         field = "helpful_votes" if helpful else "complaints"
 
         try:
-            # Process in batches
             for i in range(0, len(unique_ids), 64):
                 batch = unique_ids[i:i+64]
 
@@ -421,24 +318,17 @@ class QdrantAdapter:
             logger.debug(f"Failed to record feedback: {e}")
 
     def get_collection_info(self) -> Dict[str, Any]:
-        """Get collection statistics.
-
-        Returns:
-            Dict with collection info (name, count, vector_size, exists)
-        """
         name = self.collection_name
         vectors_count = None
         vector_size = None
         exists = None
 
-        # Count points
         try:
             cnt = self.client.count(collection_name=name, exact=True)
             vectors_count = getattr(cnt, "count", None)
         except Exception:
             pass
 
-        # Get vector size
         try:
             info = self.client.get_collection(name)
             cfg = getattr(info, "config", None)
@@ -455,7 +345,6 @@ class QdrantAdapter:
         except Exception:
             pass
 
-        # Check existence
         try:
             colls = self.client.get_collections()
             exists = any(c.name == name for c in getattr(colls, "collections", []))
@@ -470,17 +359,12 @@ class QdrantAdapter:
         }
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get collection statistics (alias for get_collection_info with health check format).
-
-        Returns:
-            Dict with stats including name, vectors_count, indexed_vectors_count, and status
-        """
         info = self.get_collection_info()
         vectors_count = info.get("vectors_count", 0) or 0
 
         return {
             "name": info.get("name"),
             "vectors_count": vectors_count,
-            "indexed_vectors_count": vectors_count,  # Qdrant indexes all vectors automatically
+            "indexed_vectors_count": vectors_count,
             "status": "ok" if info.get("exists") else "not_found",
         }

@@ -1,5 +1,3 @@
-"""Domain value objects - immutable business concepts."""
-
 from app.domain.value_objects.document_metadata import DocumentMetadata
 from app.domain.documents.metadata_schema import Department, DocType, ChunkMetadata
 

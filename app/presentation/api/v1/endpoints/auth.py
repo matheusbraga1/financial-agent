@@ -50,7 +50,6 @@ async def register(
     request: RegisterRequest,
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
 ) -> ApiResponse[UserResponse]:
-    """Registra um novo usuário no sistema."""
     try:
         structured_logger = get_structured_logger()
         structured_logger.info(
@@ -58,8 +57,7 @@ async def register(
             username=request.username,
             email=request.email
         )
-        
-        # Validar se usuário já existe
+
         existing_user = user_repo.get_user_by_username(request.username)
         if existing_user:
             raise HTTPException(
@@ -73,8 +71,7 @@ async def register(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Email já está em uso",
             )
-        
-        # Hash da senha (agora valida comprimento dentro da função)
+
         try:
             hashed_password = hash_password(request.password)
         except ValueError as e:
@@ -82,8 +79,7 @@ async def register(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e),
             )
-        
-        # Criar usuário
+
         user_id = user_repo.create_user(
             username=request.username,
             email=request.email,
@@ -91,21 +87,21 @@ async def register(
             is_active=True,
             is_admin=False,
         )
-        
+
         user = user_repo.get_user_by_id(user_id)
-        
+
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao criar usuário",
             )
-        
+
         structured_logger.info(
             "Usuário registrado com sucesso",
             user_id=user_id,
             username=request.username
         )
-        
+
         user_response = UserResponse(
             id=user["id"],
             username=user["username"],
@@ -114,13 +110,13 @@ async def register(
             is_admin=user["is_admin"],
             created_at=user["created_at"],
         )
-        
+
         return ApiResponse(
             success=True,
             data=user_response,
             message="Usuário criado com sucesso"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -144,14 +140,12 @@ async def login(
     request: LoginRequest,
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
 ) -> TokenResponse:
-    """Autentica usuário e retorna tokens JWT."""
     try:
         structured_logger = get_structured_logger()
         structured_logger.info("Tentativa de login", username=request.username)
-        
-        # Buscar usuário
+
         user = user_repo.get_user_by_username(request.username)
-        
+
         if not user:
             structured_logger.warning(
                 "Login falhou - usuário não encontrado",
@@ -162,8 +156,7 @@ async def login(
                 detail="Username ou senha incorretos",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        # Verificar senha
+
         if not verify_password(request.password, user["hashed_password"]):
             structured_logger.warning(
                 "Login falhou - senha incorreta",
@@ -174,8 +167,7 @@ async def login(
                 detail="Username ou senha incorretos",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        # Verificar se usuário está ativo
+
         if not user["is_active"]:
             structured_logger.warning(
                 "Login falhou - usuário inativo",
@@ -185,8 +177,7 @@ async def login(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Usuário inativo. Contate o administrador.",
             )
-        
-        # Gerar tokens
+
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
         refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
         
@@ -199,11 +190,10 @@ async def login(
             data={"sub": str(user["id"])},
             expires_delta=refresh_token_expires,
         )
-        
-        # Armazenar refresh token no banco (legado - novo handler já armazena no Redis)
+
         from datetime import datetime
         expires_at = datetime.utcnow() + refresh_token_expires
-        
+
         try:
             user_repo.store_refresh_token(
                 user_id=user["id"],
@@ -212,20 +202,20 @@ async def login(
             )
         except Exception as e:
             logger.warning(f"Falha ao armazenar refresh token no SQLite: {e}")
-        
+
         structured_logger.info(
             "Login bem-sucedido",
             user_id=user["id"],
             username=request.username
         )
-        
+
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
             expires_in=settings.access_token_expire_minutes * 60,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -248,12 +238,10 @@ async def refresh_token(
     request: RefreshTokenRequest,
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
 ) -> TokenResponse:
-    """Renova access token usando refresh token válido."""
     try:
         structured_logger = get_structured_logger()
         structured_logger.info("Tentativa de refresh token")
-        
-        # Decodificar refresh token
+
         payload = decode_refresh_token(request.refresh_token)
 
         if not payload:
@@ -265,7 +253,6 @@ async def refresh_token(
 
         user_id = int(payload["sub"])
 
-        # Verificar se refresh token está no banco (validação adicional)
         stored_token = user_repo.get_refresh_token(request.refresh_token)
 
         if not stored_token:
@@ -279,17 +266,15 @@ async def refresh_token(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Buscar usuário
         user = user_repo.get_user_by_id(user_id)
-        
+
         if not user or not user["is_active"]:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Usuário inválido ou inativo",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        # Gerar novos tokens
+
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
 
         access_token = create_access_token(
@@ -303,11 +288,10 @@ async def refresh_token(
             data={"sub": str(user["id"])},
             expires_delta=refresh_token_expires,
         )
-        
-        # Rotação de refresh token
+
         from datetime import datetime
         expires_at = datetime.utcnow() + refresh_token_expires
-        
+
         try:
             user_repo.delete_refresh_token(request.refresh_token)
             user_repo.store_refresh_token(
@@ -318,16 +302,16 @@ async def refresh_token(
         except Exception as e:
             logger.warning(f"Falha ao rotacionar refresh token: {e}")
             new_refresh_token = request.refresh_token
-        
+
         structured_logger.info("Token renovado com sucesso", user_id=user["id"])
-        
+
         return TokenResponse(
             access_token=access_token,
             refresh_token=new_refresh_token,
             token_type="bearer",
             expires_in=settings.access_token_expire_minutes * 60,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -349,10 +333,9 @@ async def refresh_token(
 async def get_me(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> ApiResponse[MeResponse]:
-    """Retorna informações do usuário autenticado."""
     structured_logger = get_structured_logger()
     structured_logger.info("Consultando /me", user_id=current_user["id"])
-    
+
     user_response = UserResponse(
         id=current_user["id"],
         username=current_user["username"],
@@ -361,12 +344,12 @@ async def get_me(
         is_admin=current_user["is_admin"],
         created_at=current_user["created_at"],
     )
-    
+
     me_response = MeResponse(
         user=user_response,
         message="Autenticado com sucesso",
     )
-    
+
     return ApiResponse(
         success=True,
         data=me_response,
@@ -388,21 +371,14 @@ async def logout(
     current_user: Dict[str, Any] = Depends(get_current_user),
     user_repo: SQLiteUserRepository = Depends(get_user_repository),
 ) -> ApiResponse[Dict[str, str]]:
-    """
-    Logout do usuário.
-    
-    NOVO: Agora revoga o access token via blacklist Redis!
-    """
     try:
         structured_logger = get_structured_logger()
         structured_logger.info("Logout iniciado", user_id=current_user["id"])
 
-        # Extrair token do header
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            
-            # NOVO: Revogar token via blacklist
+
             revoked = revoke_token(token)
             if revoked:
                 structured_logger.info(
@@ -414,7 +390,7 @@ async def logout(
                     "Falha ao revogar access token",
                     user_id=current_user["id"]
                 )
-        
+
         structured_logger.info("Logout processado", user_id=current_user["id"])
 
         return ApiResponse(
@@ -425,7 +401,6 @@ async def logout(
 
     except Exception as e:
         logger.error(f"Erro ao fazer logout: {e}", exc_info=True)
-        # Mesmo com erro, retorna sucesso (idempotente)
         return ApiResponse(
             success=True,
             data={"message": "Logout realizado"},

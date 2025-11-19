@@ -1,9 +1,3 @@
-"""
-Article Processor Module
-
-Responsible for processing individual GLPI articles.
-Follows Single Responsibility Principle and Dependency Inversion.
-"""
 import logging
 import uuid
 from typing import Dict, Any, List, Optional
@@ -22,18 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class ArticleProcessor:
-    """
-    Processes GLPI articles through the full pipeline.
-
-    This class coordinates:
-    - Content cleaning
-    - Classification
-    - Intelligent chunking
-    - Embedding generation
-    - Vector storage
-
-    Dependencies are injected following Dependency Inversion Principle.
-    """
 
     def __init__(
         self,
@@ -44,17 +26,6 @@ class ArticleProcessor:
         vector_store: QdrantAdapter,
         embedding_dimension: int
     ):
-        """
-        Initialize article processor with dependencies.
-
-        Args:
-            content_cleaner: Service for cleaning content
-            chunker: Service for intelligent chunking
-            classifier: Service for domain classification
-            embedding_service: Service for generating embeddings
-            vector_store: Service for vector storage
-            embedding_dimension: Expected embedding dimension
-        """
         self.content_cleaner = content_cleaner
         self.chunker = chunker
         self.classifier = classifier
@@ -67,33 +38,20 @@ class ArticleProcessor:
         article: Dict[str, Any],
         dry_run: bool = False
     ) -> tuple[bool, int, List[int]]:
-        """
-        Process a single article through the full pipeline.
-
-        Args:
-            article: GLPI article dictionary
-            dry_run: If True, skip actual indexing
-
-        Returns:
-            Tuple of (success, num_chunks, chunk_sizes)
-        """
         title = article.get("title", "Sem título")
         content_raw = article.get("content", "")
 
-        # Step 1: Clean content
         content_clean = self.content_cleaner.clean(content_raw, title)
 
         if not self.content_cleaner.is_valid_content(content_clean):
             logger.warning(f"Article '{title}' too short after cleaning, skipping")
             return False, 0, []
 
-        # Step 2: Classify article and build metadata
         metadata = self._classify_and_build_metadata(
             article=article,
             content=content_clean
         )
 
-        # Step 3: Chunk document intelligently
         chunks = self.chunker.chunk_document(
             text=content_clean,
             title=title,
@@ -106,7 +64,6 @@ class ArticleProcessor:
 
         chunk_sizes = [len(chunk.text) for chunk in chunks]
 
-        # Step 4: Index chunks (if not dry run)
         if not dry_run:
             indexed_count = self._index_chunks(chunks, title, metadata)
             if indexed_count == 0:
@@ -119,21 +76,10 @@ class ArticleProcessor:
         article: Dict[str, Any],
         content: str
     ) -> DocumentMetadata:
-        """
-        Classify article and build comprehensive metadata.
-
-        Args:
-            article: GLPI article dictionary
-            content: Cleaned article content
-
-        Returns:
-            DocumentMetadata object
-        """
         title = article.get("title", "")
         category = article.get("category", "Geral")
         glpi_meta = article.get("metadata", {})
 
-        # Classify department
         sample_text = f"{title} {category} {content[:1000]}"
         department_strings = self.classifier.classify(sample_text)
         departments = self._convert_to_department_enums(department_strings)
@@ -141,14 +87,11 @@ class ArticleProcessor:
         if not departments:
             departments = [Department.GERAL]
 
-        # Determine document type
         doc_type = DocType.FAQ if glpi_meta.get("is_faq") else DocType.ARTICLE
 
-        # Extract tags and keywords
         tags = self._extract_tags(title, content, category)
         keywords = self._extract_keywords(title, content)
 
-        # Build metadata
         metadata = DocumentMetadata(
             source_id=f"glpi_{article['id']}",
             title=title,
@@ -180,7 +123,6 @@ class ArticleProcessor:
         self,
         department_strings: List[str]
     ) -> List[Department]:
-        """Convert string department names to Department enums."""
         departments = []
 
         mapping = {
@@ -200,15 +142,12 @@ class ArticleProcessor:
         return departments
 
     def _extract_tags(self, title: str, content: str, category: str) -> List[str]:
-        """Extract relevant tags from document."""
         tags = set()
 
-        # Category hierarchy
         if category:
             parts = [p.strip() for p in category.split(">")]
             tags.update(p for p in parts if p and p != "Geral")
 
-        # Title keywords (4+ chars, no stopwords)
         stopwords = {"para", "como", "fazer", "sobre", "quando", "onde"}
         title_words = [
             w.lower() for w in title.split()
@@ -216,34 +155,29 @@ class ArticleProcessor:
         ]
         tags.update(title_words[:5])
 
-        # Technical terms from content
         tech_terms = self._extract_technical_terms(content)
         tags.update(tech_terms[:5])
 
-        return list(tags)[:15]  # Max 15 tags
+        return list(tags)[:15]
 
     def _extract_keywords(self, title: str, content: str) -> List[str]:
-        """Extract SEO keywords from document."""
         words = (title + " " + content[:500]).lower().split()
 
-        # Count frequency
         freq = {}
         for word in words:
             if len(word) >= 4 and word.isalpha():
                 freq[word] = freq.get(word, 0) + 1
 
-        # Return top keywords
         keywords = sorted(freq.items(), key=lambda x: x[1], reverse=True)
         return [kw[0] for kw in keywords[:10]]
 
     def _extract_technical_terms(self, content: str) -> List[str]:
-        """Extract technical terms from content."""
         import re
 
         patterns = [
-            r'\b[A-Z]{2,}\b',  # Acronyms
-            r'\b[A-Z][a-z]+[A-Z][a-z]+\b',  # CamelCase
-            r'\b\w+[@.]\w+\b',  # Emails, domains
+            r'\b[A-Z]{2,}\b',
+            r'\b[A-Z][a-z]+[A-Z][a-z]+\b',
+            r'\b\w+[@.]\w+\b',
         ]
 
         terms = set()
@@ -254,11 +188,9 @@ class ArticleProcessor:
         return list(terms)
 
     def _generate_summary(self, content: str, max_length: int = 200) -> str:
-        """Generate a brief summary of the content."""
         if not content:
             return ""
 
-        # Take first paragraph or first N characters
         paragraphs = content.split('\n\n')
         if paragraphs:
             summary = paragraphs[0][:max_length]
@@ -274,22 +206,10 @@ class ArticleProcessor:
         title: str,
         metadata: DocumentMetadata
     ) -> int:
-        """
-        Index chunks in vector store.
-
-        Args:
-            chunks: List of document chunks
-            title: Article title
-            metadata: Document metadata
-
-        Returns:
-            Number of successfully indexed chunks
-        """
         indexed_count = 0
 
         for chunk in chunks:
             try:
-                # Create chunk-specific metadata
                 chunk_metadata = ChunkMetadata.from_document_metadata(
                     doc_metadata=metadata,
                     chunk_index=chunk.chunk_index,
@@ -297,7 +217,6 @@ class ArticleProcessor:
                     text=chunk.text
                 )
 
-                # Add chunk-specific fields
                 metadata_dict = chunk_metadata.model_dump()
                 metadata_dict.update({
                     "quality_score": chunk.quality_score,
@@ -306,7 +225,6 @@ class ArticleProcessor:
                     "chunk_size": len(chunk.text),
                 })
 
-                # Generate embedding
                 embedding = self.embedding_service.encode_text(chunk.text)
 
                 if len(embedding) != self.embedding_dimension:
@@ -316,10 +234,8 @@ class ArticleProcessor:
                     )
                     continue
 
-                # Build payload with sanitized data
                 payload = self._build_payload(title, chunk.text, metadata, metadata_dict)
 
-                # Store in vector database
                 doc_id = str(uuid.uuid4())
                 self.vector_store.upsert_point(
                     point_id=doc_id,
@@ -347,8 +263,6 @@ class ArticleProcessor:
         metadata: DocumentMetadata,
         metadata_dict: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Build and sanitize payload for vector storage."""
-        # Build search text for BM25
         search_text = f"{title} {title} {title} {content}"
 
         payload = {
@@ -363,7 +277,6 @@ class ArticleProcessor:
             "tags": metadata.tags,
         }
 
-        # Sanitize to ensure JSON safety
         return self._sanitize_payload(payload)
 
     def _sanitize_payload(self, payload: Any) -> Any:

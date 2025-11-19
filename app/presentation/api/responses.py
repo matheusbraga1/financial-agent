@@ -5,7 +5,6 @@ from datetime import datetime
 T = TypeVar('T')
 
 class PaginationMeta(BaseModel):
-    """Metadados de paginação"""
     page: int = Field(..., description="Página atual")
     per_page: int = Field(..., description="Items por página")
     total: int = Field(..., description="Total de items")
@@ -14,7 +13,6 @@ class PaginationMeta(BaseModel):
     has_prev: bool = Field(..., description="Tem página anterior")
 
 class ApiResponse(BaseModel, Generic[T]):
-    """Resposta padrão da API"""
     success: bool = Field(..., description="Indica se a operação foi bem-sucedida")
     data: Optional[T] = Field(None, description="Dados da resposta")
     message: Optional[str] = Field(None, description="Mensagem informativa")
@@ -37,7 +35,6 @@ class ApiResponse(BaseModel, Generic[T]):
         }
 
 class PaginatedResponse(BaseModel, Generic[T]):
-    """Resposta paginada da API"""
     success: bool = Field(True)
     data: List[T] = Field(..., description="Lista de items")
     pagination: PaginationMeta = Field(..., description="Metadados de paginação")
@@ -46,7 +43,6 @@ class PaginatedResponse(BaseModel, Generic[T]):
     request_id: Optional[str] = Field(None)
 
 class ErrorResponse(BaseModel):
-    """Resposta de erro padronizada"""
     success: bool = Field(False)
     error: str = Field(..., description="Código do erro")
     message: str = Field(..., description="Mensagem de erro")

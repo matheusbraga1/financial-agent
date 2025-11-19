@@ -53,14 +53,6 @@ async def chat(
     cache_service: CacheService = Depends(get_cache_service),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> ChatResponse:
-    """
-    Endpoint de chat síncrono com suporte a cache.
-    
-    Features:
-    - Cache Redis para queries anônimas (30min TTL)
-    - Histórico de conversação para usuários autenticados
-    - Logging estruturado com contexto
-    """
     try:
         structured_logger.info(
             "Nova requisição de chat",
@@ -68,8 +60,7 @@ async def chat(
             question_length=len(request.question),
             authenticated=current_user is not None
         )
-        
-        # Validação básica
+
         if len(request.question.strip()) < 3:
             structured_logger.warning(
                 "Pergunta muito curta rejeitada",
@@ -79,8 +70,7 @@ async def chat(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Pergunta muito curta. Digite pelo menos 3 caracteres.",
             )
-        
-        # Cache para usuários anônimos
+
         cache_key = None
         if not current_user:
             cache_key = f"chat:{hashlib.md5(request.question.lower().strip().encode()).hexdigest()}"
@@ -93,32 +83,27 @@ async def chat(
                     cache_hit=True
                 )
                 return ChatResponse(**cached_response)
-        
-        # Gerenciar sessão
+
         user_id = str(current_user["id"]) if current_user else None
         session_id = manage_conversation_uc.ensure_session(
             session_id=request.session_id,
             user_id=user_id,
         )
-        
-        # Adicionar mensagem do usuário (apenas autenticados)
+
         if current_user:
             manage_conversation_uc.add_user_message(session_id, request.question)
-        
-        # Recuperar histórico
+
         history = manage_conversation_uc.get_history(
             session_id=session_id,
             user_id=user_id,
             limit=200,
         )
-        
-        # Gerar resposta
+
         result = await generate_answer_uc.execute(
             question=request.question,
             history=history if current_user else None,
         )
-        
-        # Criar resposta
+
         response = ChatResponse(
             answer=result["answer"],
             sources=result["sources"],
@@ -127,8 +112,7 @@ async def chat(
             session_id=session_id,
             persisted=bool(current_user),
         )
-        
-        # Persistir resposta (apenas autenticados)
+
         if current_user:
             message_id = manage_conversation_uc.add_assistant_message(
                 session_id=session_id,
@@ -139,12 +123,11 @@ async def chat(
             )
             response.message_id = message_id
         else:
-            # Cachear resposta para queries anônimas
             try:
                 await cache_service.set(
                     cache_key,
                     response.dict(),
-                    ttl=1800  # 30 minutos
+                    ttl=1800
                 )
                 structured_logger.info(
                     "Resposta armazenada no cache",
@@ -201,14 +184,6 @@ async def chat_stream(
     cache_service: CacheService = Depends(get_cache_service),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> StreamingResponse:
-    """
-    Endpoint de chat com streaming SSE.
-    
-    Features:
-    - Streaming em tempo real via Server-Sent Events
-    - Cache opcional para queries anônimas
-    - Logging estruturado
-    """
     structured_logger.info(
         "Nova requisição de chat stream",
         session_id=request.session_id,
@@ -218,14 +193,12 @@ async def chat_stream(
     
     async def generate():
         try:
-            # Validação básica
             if not request.question or len(request.question.strip()) < 3:
                 structured_logger.warning("Pergunta inválida no streaming")
                 yield f"data: {json.dumps({'type': 'error', 'data': {'message': 'Pergunta muito curta ou vazia.'}}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
-            
-            # Verificar cache para usuários anônimos
+
             cache_key = None
             if not current_user:
                 cache_key = f"chat_stream:{hashlib.md5(request.question.lower().strip().encode()).hexdigest()}"
@@ -236,56 +209,51 @@ async def chat_stream(
                         "Resposta em stream recuperada do cache",
                         cache_key=cache_key
                     )
-                    # Enviar resposta cacheada como stream
                     yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'token', 'data': cached_response['answer']}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'sources', 'data': cached_response['sources']}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'metadata', 'data': {'confidence': cached_response['confidence'], 'model_used': cached_response['model_used'], 'from_cache': True}}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
                     return
-            
-            # Gerenciar sessão
+
             user_id = str(current_user["id"]) if current_user else None
             session_id = manage_conversation_uc.ensure_session(
                 session_id=request.session_id,
                 user_id=user_id,
             )
-            
-            # Adicionar mensagem do usuário
+
             if current_user:
                 manage_conversation_uc.add_user_message(session_id, request.question)
-            
-            # Recuperar histórico
+                structured_logger.info(
+                    "Mensagem do usuario persistida",
+                    session_id=session_id,
+                    user_id=current_user.get("id"),
+                    question_length=len(request.question)
+                )
+
             history = manage_conversation_uc.get_history(
                 session_id=session_id,
                 user_id=user_id,
                 limit=200,
             )
-            
-            # Sinalizar início do stream
+
             yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
-            
-            # Coletar resposta completa para cache
+
             full_answer = ""
             sources = []
             confidence = 0.0
             model_used = ""
-            
-            # Stream da resposta
+
             async for chunk in stream_answer_uc.execute(
                 question=request.question,
                 history=history if current_user else None,
             ):
-                # O use case retorna tuplas (tipo, dados)
-                # Converter para formato de dicionário esperado pelo frontend
                 if isinstance(chunk, tuple):
                     chunk_type, chunk_data = chunk
                 else:
-                    # Fallback para formato de dicionário (caso já esteja no formato correto)
                     chunk_type = chunk.get("type")
                     chunk_data = chunk.get("data")
 
-                # Mapear tipos internos para tipos do frontend
                 if chunk_type == "token":
                     full_answer += chunk_data
                     yield f"data: {json.dumps({'type': 'token', 'data': chunk_data}, ensure_ascii=False)}\n\n"
@@ -296,10 +264,8 @@ async def chat_stream(
 
                 elif chunk_type == "confidence":
                     confidence = float(chunk_data) if chunk_data else 0.0
-                    # Não enviamos confidence separadamente, será enviado com metadata
 
                 elif chunk_type == "_done":
-                    # Enviar metadata antes de done
                     from app.infrastructure.config.settings import get_settings
                     settings = get_settings()
                     model_used = settings.groq_model if settings.llm_provider == "groq" else settings.ollama_model
@@ -319,22 +285,43 @@ async def chat_stream(
                         error=error_message
                     )
                     yield f"data: {json.dumps({'type': 'error', 'data': {'message': error_message}}, ensure_ascii=False)}\n\n"
-            
-            # Persistir mensagem do assistente (apenas autenticados)
+
             if current_user and full_answer:
                 try:
-                    manage_conversation_uc.add_assistant_message(
+                    message_id = manage_conversation_uc.add_assistant_message(
                         session_id=session_id,
                         answer=full_answer,
                         sources=sources,
                         model_used=model_used,
                         confidence=confidence,
                     )
+                    structured_logger.info(
+                        "Mensagem do assistente persistida",
+                        session_id=session_id,
+                        message_id=message_id,
+                        answer_length=len(full_answer),
+                        sources_count=len(sources)
+                    )
                 except Exception as e:
-                    logger.warning(f"Falha ao persistir mensagem: {e}")
-            
-            # Cachear resposta para queries anônimas
-            elif not current_user and cache_key and full_answer:
+                    structured_logger.error(
+                        "ERRO ao persistir mensagem do assistente",
+                        session_id=session_id,
+                        error=str(e),
+                        exc_info=True
+                    )
+            elif current_user and not full_answer:
+                structured_logger.warning(
+                    "Mensagem do assistente NAO persistida - full_answer vazio",
+                    session_id=session_id,
+                    user_id=current_user.get("id")
+                )
+            elif not current_user:
+                structured_logger.debug(
+                    "Mensagem do assistente NAO persistida - usuario anonimo",
+                    session_id=session_id
+                )
+
+            if not current_user and cache_key and full_answer:
                 try:
                     cache_data = {
                         "answer": full_answer,
@@ -350,14 +337,14 @@ async def chat_stream(
                     )
                 except Exception as e:
                     logger.warning(f"Falha ao cachear stream: {e}")
-            
+
             structured_logger.info(
                 "Stream concluído com sucesso",
                 answer_length=len(full_answer),
                 sources_count=len(sources),
                 confidence=round(confidence, 2)
             )
-            
+
         except Exception as e:
             structured_logger.error(
                 "Erro durante streaming",
@@ -366,7 +353,7 @@ async def chat_stream(
             )
             yield f"data: {json.dumps({'type': 'error', 'data': {'message': 'Erro ao processar sua pergunta.'}}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
@@ -393,7 +380,6 @@ async def submit_feedback(
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> ApiResponse[Dict[str, str]]:
-    """Submete feedback sobre uma resposta do assistente."""
     try:
         structured_logger.info(
             "Feedback recebido",
@@ -415,7 +401,7 @@ async def submit_feedback(
             data={"message": "Feedback registrado com sucesso"},
             message="Obrigado pelo feedback!"
         )
-        
+
     except Exception as e:
         structured_logger.error("Erro ao registrar feedback", error=str(e))
         raise HTTPException(
@@ -436,7 +422,6 @@ async def get_history(
     current_user: Dict[str, Any] = Depends(get_current_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> ChatHistoryResponse:
-    """Retorna histórico de conversação de uma sessão."""
     try:
         structured_logger.info(
             "Recuperando histórico",
@@ -455,7 +440,7 @@ async def get_history(
             session_id=session_id,
             messages=history,
         )
-        
+
     except Exception as e:
         structured_logger.error("Erro ao recuperar histórico", error=str(e))
         raise HTTPException(
@@ -476,7 +461,6 @@ async def list_sessions(
     current_user: Dict[str, Any] = Depends(get_current_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> SessionsResponse:
-    """Lista todas as sessões do usuário autenticado com paginação para scroll infinito."""
     try:
         structured_logger.info(
             "Listando sessões",
@@ -529,7 +513,6 @@ async def delete_session(
     current_user: Dict[str, Any] = Depends(get_current_user),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> ApiResponse[Dict[str, str]]:
-    """Deleta uma sessão e todo seu histórico."""
     try:
         structured_logger.info(
             "Deletando sessão",
@@ -547,7 +530,7 @@ async def delete_session(
             data={"message": "Sessão deletada com sucesso"},
             message="Sessão e histórico removidos"
         )
-        
+
     except Exception as e:
         structured_logger.error("Erro ao deletar sessão", error=str(e))
         raise HTTPException(
@@ -563,13 +546,12 @@ async def delete_session(
 async def get_models_config(
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> Dict[str, Any]:
-    """Retorna configuração dos modelos disponíveis."""
     from app.infrastructure.config.settings import get_settings
-    
+
     settings = get_settings()
-    
+
     structured_logger.info("Consultando configuração de modelos")
-    
+
     return {
         "llm": {
             "provider": settings.llm_provider,

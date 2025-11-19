@@ -32,16 +32,6 @@ async def health_check(
     embeddings: SentenceTransformerAdapter = Depends(get_embeddings_adapter),
     redis_client: redis.Redis = Depends(get_redis_client),
 ) -> Dict[str, Any]:
-    """
-    Health check abrangente do sistema.
-    
-    Verifica:
-    - Vector store (Qdrant)
-    - Embeddings model
-    - Database (SQLite)
-    - Redis cache
-    - System metrics (CPU, RAM, Disk)
-    """
     settings = get_settings()
     
     health = {
@@ -51,8 +41,7 @@ async def health_check(
         "components": {},
         "system": {}
     }
-    
-    # 1. Vector Store (Qdrant)
+
     try:
         stats = vector_store.get_stats()
         health["components"]["vector_store"] = {
@@ -68,8 +57,7 @@ async def health_check(
             "status": "unhealthy",
             "error": str(e),
         }
-    
-    # 2. Embeddings Model
+
     try:
         dimension = embeddings.get_dimension()
         health["components"]["embeddings"] = {
@@ -85,8 +73,7 @@ async def health_check(
             "status": "unhealthy",
             "error": str(e),
         }
-    
-    # 3. Database (SQLite)
+
     try:
         from app.infrastructure.repositories.conversation_repository import conversation_repository
         conn = conversation_repository._connect()
@@ -105,8 +92,7 @@ async def health_check(
             "status": "unhealthy",
             "error": str(e),
         }
-    
-    # 4. Redis Cache (NOVO)
+
     try:
         await redis_client.ping()
         info = await redis_client.info()
@@ -124,8 +110,7 @@ async def health_check(
             "status": "unhealthy",
             "error": str(e),
         }
-    
-    # 5. System Metrics (NOVO)
+
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
@@ -150,16 +135,15 @@ async def health_check(
     except Exception as e:
         logger.error(f"System metrics failed: {e}")
         health["system"] = {"error": str(e)}
-    
-    # Determinar status code baseado no status geral
+
     status_code = (
         status.HTTP_200_OK
         if health["status"] == "healthy"
         else status.HTTP_503_SERVICE_UNAVAILABLE
         if health["status"] == "unhealthy"
-        else status.HTTP_200_OK  # degraded ainda retorna 200
+        else status.HTTP_200_OK
     )
-    
+
     return health
 
 @router.get(
@@ -170,12 +154,6 @@ async def health_check(
     },
 )
 async def liveness_probe() -> Dict[str, str]:
-    """
-    Liveness probe simples.
-    
-    Usado por Kubernetes para verificar se o pod está vivo.
-    Se falhar, o pod será reiniciado.
-    """
     return {"status": "alive"}
 
 @router.get(
@@ -190,17 +168,10 @@ async def readiness_probe(
     vector_store: QdrantAdapter = Depends(get_vector_store),
     redis_client: redis.Redis = Depends(get_redis_client),
 ) -> Dict[str, str]:
-    """
-    Readiness probe.
-    
-    Usado por Kubernetes para verificar se o pod está pronto
-    para receber tráfego. Se falhar, o pod é removido do load balancer.
-    """
     try:
-        # Verificar componentes críticos
         vector_store.get_stats()
         await redis_client.ping()
-        
+
         return {"status": "ready"}
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")

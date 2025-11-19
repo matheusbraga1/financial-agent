@@ -45,7 +45,6 @@ security = HTTPBearer()
 
 @lru_cache()
 def get_redis_client() -> redis.Redis:
-    """Cria cliente Redis singleton"""
     settings = get_settings()
 
     logger.info(
@@ -59,12 +58,11 @@ def get_redis_client() -> redis.Redis:
         password=settings.redis_password if settings.redis_password else None,
         ssl=settings.redis_ssl,
         max_connections=settings.redis_max_connections,
-        decode_responses=False,  # Para suportar pickle
+        decode_responses=False,
     )
 
 @lru_cache()
 def get_cache_service() -> CacheService:
-    """Cria serviço de cache singleton"""
     settings = get_settings()
     redis_client = get_redis_client()
 
@@ -78,7 +76,6 @@ def get_cache_service() -> CacheService:
 
 @lru_cache()
 def get_structured_logger() -> StructuredLogger:
-    """Cria logger estruturado singleton"""
     settings = get_settings()
 
     return StructuredLogger(
@@ -89,7 +86,6 @@ def get_structured_logger() -> StructuredLogger:
 
 @lru_cache()
 def get_jwt_handler() -> JWTHandler:
-    """Cria JWT handler singleton"""
     settings = get_settings()
     redis_client = get_redis_client()
 
@@ -313,7 +309,7 @@ def get_stream_answer_use_case(
     confidence_scorer: ConfidenceScorer = Depends(get_confidence_scorer),
     answer_generator: AnswerGenerator = Depends(get_answer_generator),
     memory_manager: MemoryManager = Depends(get_memory_manager),
-    clarifier: Clarifier = Depends(get_clarifier),  # ✅ NOVO
+    clarifier: Clarifier = Depends(get_clarifier),
     llm: HybridLLMAdapter = Depends(get_llm_adapter),
 ) -> StreamAnswerUseCase:
     logger.debug("Criando StreamAnswerUseCase")
@@ -352,25 +348,55 @@ def get_ingest_document_use_case(
         vector_store_port=vector_store,
     )
 
-def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
-        HTTPBearer(auto_error=False)
-    ),
-) -> Optional[dict]:
-    if not credentials:
-        return None
-
-    try:
-        return get_current_user(credentials)
-    except HTTPException:
-        return None
-
 def get_conversation_repository():
     return conversation_repository
 
 
 def get_user_repository():
     return user_repository
+
+
+def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        HTTPBearer(auto_error=False)
+    ),
+    user_repo = Depends(get_user_repository),
+) -> Optional[dict]:
+    if not credentials:
+        logger.debug("get_optional_user: Nenhuma credencial fornecida (usuario anonimo)")
+        return None
+
+    try:
+        from app.presentation.api.security import decode_access_token
+
+        token = credentials.credentials
+
+        payload = decode_access_token(token)
+
+        if not payload:
+            logger.warning("get_optional_user: Token invalido ou expirado")
+            return None
+
+        user_id = int(payload["sub"])
+        user = user_repo.get_user_by_id(user_id)
+
+        if not user:
+            logger.warning(f"get_optional_user: Usuario nao encontrado - user_id={user_id}")
+            return None
+
+        if not user["is_active"]:
+            logger.warning(f"get_optional_user: Usuario inativo - user_id={user_id}")
+            return None
+
+        logger.info(f"get_optional_user: Usuario autenticado - user_id={user.get('id')}, username={user.get('username')}")
+        return user
+
+    except HTTPException as e:
+        logger.warning(f"get_optional_user: Erro na autenticacao - {e.detail}")
+        return None
+    except Exception as e:
+        logger.error(f"get_optional_user: Erro inesperado - {e}", exc_info=True)
+        return None
 
 
 def get_current_user(

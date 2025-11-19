@@ -8,8 +8,6 @@ from datetime import timedelta
 import pickle
 
 class CacheService:
-    """Serviço de cache robusto com Redis (async)"""
-
     def __init__(
         self,
         redis_client: redis.Redis,
@@ -21,11 +19,9 @@ class CacheService:
         self.prefix = prefix
 
     def _make_key(self, key: str) -> str:
-        """Gera chave com namespace"""
         return f"{self.prefix}:{key}"
 
     async def get(self, key: str) -> Optional[Any]:
-        """Recupera valor do cache"""
         full_key = self._make_key(key)
         value = await self.redis.get(full_key)
 
@@ -42,7 +38,6 @@ class CacheService:
         value: Any,
         ttl: Optional[int] = None
     ) -> bool:
-        """Armazena valor no cache"""
         full_key = self._make_key(key)
         ttl = ttl or self.default_ttl
 
@@ -54,12 +49,10 @@ class CacheService:
         return await self.redis.setex(full_key, ttl, serialized)
 
     async def delete(self, key: str) -> bool:
-        """Remove valor do cache"""
         full_key = self._make_key(key)
         return bool(await self.redis.delete(full_key))
 
     async def clear_pattern(self, pattern: str) -> int:
-        """Limpa cache por padrão"""
         full_pattern = self._make_key(pattern)
         keys = await self.redis.keys(full_pattern)
         if keys:
@@ -72,7 +65,6 @@ class CacheService:
         func: Callable,
         ttl: Optional[int] = None
     ) -> Any:
-        """Get com fallback para função"""
         value = await self.get(key)
         if value is None:
             if asyncio.iscoroutinefunction(func):
@@ -87,15 +79,12 @@ def cache(
     key_prefix: Optional[str] = None,
     key_builder: Optional[Callable] = None
 ):
-    """Decorator para cache automático"""
     def decorator(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
-            # Constrói chave do cache
             if key_builder:
                 cache_key = key_builder(*args, **kwargs)
             else:
-                # Chave automática baseada em função e argumentos
                 key_parts = [
                     key_prefix or func.__name__,
                     str(args),
@@ -104,18 +93,15 @@ def cache(
                 cache_key = hashlib.md5(
                     ":".join(key_parts).encode()
                 ).hexdigest()
-            
-            # Tenta recuperar do cache
+
             cache_service = kwargs.get('cache_service')
             if cache_service:
                 cached = cache_service.get(cache_key)
                 if cached is not None:
                     return cached
-            
-            # Executa função
+
             result = await func(*args, **kwargs)
-            
-            # Armazena no cache
+
             if cache_service:
                 cache_service.set(cache_key, result, ttl)
             
@@ -123,7 +109,6 @@ def cache(
         
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
-            # Versão síncrona
             if key_builder:
                 cache_key = key_builder(*args, **kwargs)
             else:
@@ -146,10 +131,9 @@ def cache(
             
             if cache_service:
                 cache_service.set(cache_key, result, ttl)
-            
+
             return result
-        
-        # Retorna wrapper apropriado
+
         import asyncio
         if asyncio.iscoroutinefunction(func):
             return async_wrapper

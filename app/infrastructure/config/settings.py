@@ -52,31 +52,31 @@ class Settings(BaseSettings):
     anchor_gating_threshold: float = 0.3
 
     log_level: str = "INFO"
-    log_format: str = "json"  # json ou text
+    log_format: str = "json"
 
-    # Redis Configuration
+
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: str = ""
     redis_ssl: bool = False
     redis_max_connections: int = 50
-    cache_default_ttl: int = 3600  # 1 hora
+    cache_default_ttl: int = 3600
 
-    # JWT Secret - OBRIGATÓRIO em produção
+
     jwt_secret: str = Field(
         default="dev-secret-key-change-in-production-min-32-chars",
         description="JWT secret key - MUST be set via JWT_SECRET env var in production"
     )
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30  # Reduzido de 60 para 30
-    refresh_token_expire_days: int = 7  # Reduzido de 30 para 7
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
 
-    # Rate Limiting
+
     rate_limit_enabled: bool = True
     rate_limit_requests: int = 50
-    rate_limit_window: int = 60  # segundos
-    rate_limit_strategy: str = "sliding_window"  # ou fixed_window
+    rate_limit_window: int = 60
+    rate_limit_strategy: str = "sliding_window"
 
     password_hash_iterations: int = 200_000
     password_hash_iterations_dev: int = 50_000
@@ -85,7 +85,6 @@ class Settings(BaseSettings):
     glpi_db_port: int = 3306
     glpi_db_name: str = "glpi"
     glpi_db_user: str = "glpi"
-    # GLPI Password - usar variável de ambiente
     glpi_db_password: str = Field(
         default="",
         description="GLPI database password - MUST be set via GLPI_DB_PASSWORD env var"
@@ -94,14 +93,12 @@ class Settings(BaseSettings):
 
     @validator('jwt_secret')
     def validate_jwt_secret(cls, v, values):
-        """Valida que JWT secret tem comprimento mínimo e BLOQUEIA se usar padrão em produção."""
         if len(v) < 32:
             raise ValueError(
                 'JWT_SECRET must be at least 32 characters long. '
                 'Please set a strong secret via environment variable.'
             )
 
-        # BLOQUEAR se estiver usando o valor padrão em produção
         if not values.get('debug', False) and v == "dev-secret-key-change-in-production-min-32-chars":
             raise ValueError(
                 'SECURITY ERROR: Cannot use default JWT_SECRET in production! '
@@ -113,7 +110,6 @@ class Settings(BaseSettings):
 
     @validator('glpi_db_password')
     def validate_glpi_password(cls, v, values):
-        """Valida que senha GLPI está configurada."""
         if not v and not values.get('debug', False):
             import logging
             logger = logging.getLogger(__name__)

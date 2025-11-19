@@ -5,21 +5,18 @@ from enum import Enum
 from .validators import AdvancedValidators
 
 class UserRole(str, Enum):
-    """Roles do sistema"""
     ADMIN = "admin"
     MANAGER = "manager"
     USER = "user"
     GUEST = "guest"
 
 class UserStatus(str, Enum):
-    """Status do usuário"""
     ACTIVE = "active"
     INACTIVE = "inactive"
     SUSPENDED = "suspended"
     PENDING = "pending"
 
 class UserCreateRequest(BaseModel):
-    """Request para criar usuário"""
     email: str = Field(..., description="Email do usuário")
     password: str = Field(..., min_length=8, description="Senha forte")
     name: str = Field(..., min_length=2, max_length=100, description="Nome completo")
@@ -64,7 +61,6 @@ class UserCreateRequest(BaseModel):
         }
 
 class UserResponse(BaseModel):
-    """Response com dados do usuário"""
     id: str = Field(..., description="ID único do usuário")
     email: str = Field(..., description="Email do usuário")
     name: str = Field(..., description="Nome completo")
@@ -81,7 +77,6 @@ class UserResponse(BaseModel):
     @field_validator('cpf')
     @classmethod
     def mask_cpf(cls, v):
-        """Mascara CPF para resposta"""
         if v and len(v) == 11:
             return f"{v[:3]}.***.**{v[-2:]}"
         return v

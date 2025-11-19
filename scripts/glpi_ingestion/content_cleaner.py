@@ -1,9 +1,3 @@
-"""
-Content Cleaner Module
-
-Responsible for cleaning and normalizing GLPI content.
-Follows Single Responsibility Principle - only handles content cleaning.
-"""
 import base64
 import re
 import unicodedata
@@ -12,8 +6,6 @@ from html import unescape
 from typing import Optional
 from bs4 import BeautifulSoup
 
-# Optional dependency - ftfy for encoding fixes
-# If not available, falls back to basic encoding fixes
 try:
     import ftfy
     HAS_FTFY = True
@@ -29,24 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class ContentCleaner:
-    """
-    Cleans and normalizes GLPI content.
-
-    This class handles:
-    - Base64 detection and decoding
-    - HTML tag removal
-    - HTML entity decoding
-    - Encoding fixes
-    - Whitespace normalization
-    """
-
     def __init__(self, min_content_length: int = 50):
-        """
-        Initialize content cleaner.
-
-        Args:
-            min_content_length: Minimum acceptable content length after cleaning
-        """
         self.min_content_length = min_content_length
         self._html_replacements = {
             '&nbsp;': ' ',
@@ -60,22 +35,11 @@ class ContentCleaner:
         }
 
     def clean(self, content: str, title: str = "") -> str:
-        """
-        Main cleaning method - orchestrates all cleaning steps.
-
-        Args:
-            content: Raw content from GLPI
-            title: Article title (for logging)
-
-        Returns:
-            Cleaned plain text content
-        """
         if not content:
             return ""
 
         original_length = len(content)
 
-        # Pipeline of cleaning operations
         content = self._decode_base64_if_needed(content, title)
         content = self._decode_html_entities(content)
         content = self._remove_html_tags(content)
@@ -91,21 +55,9 @@ class ContentCleaner:
         return content
 
     def is_valid_content(self, content: str) -> bool:
-        """
-        Check if content is valid after cleaning.
-
-        Args:
-            content: Cleaned content
-
-        Returns:
-            True if content meets minimum requirements
-        """
         return bool(content and len(content.strip()) >= self.min_content_length)
 
-    # Private methods - each handles one specific concern
-
     def _is_base64(self, text: str) -> bool:
-        """Check if text is base64 encoded."""
         if not text or len(text) < 50:
             return False
 
@@ -123,7 +75,6 @@ class ContentCleaner:
             return False
 
     def _decode_base64_if_needed(self, content: str, title: str) -> str:
-        """Decode base64 content if detected."""
         if self._is_base64(content):
             logger.info(f"Detected base64 content in '{title[:50]}...', decoding")
             try:
@@ -134,22 +85,17 @@ class ContentCleaner:
         return content
 
     def _decode_html_entities(self, content: str) -> str:
-        """Decode HTML entities like &lt;, &#60;, etc."""
         return unescape(content)
 
     def _remove_html_tags(self, content: str) -> str:
-        """Remove HTML tags and extract plain text."""
         try:
             soup = BeautifulSoup(content, 'html.parser')
 
-            # Remove script and style elements
             for script in soup(["script", "style"]):
                 script.decompose()
 
-            # Get text
             text = soup.get_text()
 
-            # Clean up whitespace
             lines = (line.strip() for line in text.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
             return ' '.join(chunk for chunk in chunks if chunk)
@@ -158,52 +104,32 @@ class ContentCleaner:
             return content
 
     def _replace_html_characters(self, content: str) -> str:
-        """Replace common HTML-escaped characters."""
         for old, new in self._html_replacements.items():
             content = content.replace(old, new)
         return content
 
     def _normalize_whitespace(self, content: str) -> str:
-        """Normalize whitespace and newlines."""
-        # Max 2 consecutive newlines
         content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
-        # Single spaces only
         content = re.sub(r' +', ' ', content)
         return content
 
     def _remove_non_printable(self, content: str) -> str:
-        """
-        Remove non-printable characters (except newlines and tabs).
-
-        Preserves all valid UTF-8 characters including accented letters.
-        Only removes control characters that are not whitespace.
-        """
         return ''.join(
             char for char in content
             if (
-                char.isprintable()  # Printable characters (includes accented letters)
-                or char in '\n\t\r'  # Preserve newlines, tabs, carriage returns
-                or unicodedata.category(char)[0] == 'L'  # All letters (including accented)
-                or unicodedata.category(char)[0] == 'N'  # All numbers
-                or unicodedata.category(char)[0] == 'P'  # All punctuation
-                or unicodedata.category(char)[0] == 'S'  # All symbols
+                char.isprintable()
+                or char in '\n\t\r'
+                or unicodedata.category(char)[0] == 'L'
+                or unicodedata.category(char)[0] == 'N'
+                or unicodedata.category(char)[0] == 'P'
+                or unicodedata.category(char)[0] == 'S'
             )
         )
 
     def _fix_encoding(self, content: str) -> str:
-        """
-        Try to fix encoding issues ONLY if ftfy is available.
-
-        IMPORTANT: MySQL with charset=utf8mb4 already returns correct UTF-8.
-        We should NOT try to "fix" encoding manually as it can corrupt valid data.
-        Only use ftfy library which is designed for this purpose.
-
-        Falls back to returning content unchanged if ftfy is not installed.
-        """
         if not content:
             return content
 
-        # ONLY use ftfy if available - it's safe and tested
         if HAS_FTFY:
             try:
                 fixed = ftfy.fix_text(content)
@@ -213,17 +139,9 @@ class ContentCleaner:
             except Exception as e:
                 logger.debug(f"Failed to fix encoding with ftfy: {e}")
 
-        # NO MANUAL ENCODING FIXES - they corrupt valid UTF-8 data
-        # If you see "???" in output:
-        # 1. Check MySQL connection charset is utf8mb4 ✓ (already correct)
-        # 2. Check database column encoding is utf8mb4
-        # 3. Install ftfy: pip install ftfy
-        # 4. Check source data in MySQL directly
-
         return content
 
     def _normalize_unicode(self, content: str) -> str:
-        """Normalize unicode to NFC form."""
         return unicodedata.normalize('NFC', content)
 
     def _log_cleaning_results(
@@ -232,7 +150,6 @@ class ContentCleaner:
         cleaned_length: int,
         title: str
     ) -> None:
-        """Log cleaning results based on reduction severity."""
         if original_length == 0:
             return
 
@@ -256,15 +173,5 @@ class ContentCleaner:
             )
 
 
-# Factory function for easier instantiation
 def create_content_cleaner(min_content_length: int = 50) -> ContentCleaner:
-    """
-    Factory function to create a ContentCleaner instance.
-
-    Args:
-        min_content_length: Minimum acceptable content length
-
-    Returns:
-        Configured ContentCleaner instance
-    """
     return ContentCleaner(min_content_length=min_content_length)

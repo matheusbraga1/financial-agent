@@ -19,15 +19,12 @@ class ComponentHealth:
     metadata: Dict[str, Any] = None
 
 class HealthCheckService:
-    """Serviço de health check abrangente"""
-    
+
     def __init__(self, dependencies: Dict[str, Any]):
         self.dependencies = dependencies
     
     async def check_database(self) -> ComponentHealth:
-        """Verifica saúde do banco de dados"""
         try:
-            # Exemplo com SQLAlchemy
             db = self.dependencies.get('database')
             if db:
                 result = await db.execute("SELECT 1")
@@ -45,7 +42,6 @@ class HealthCheckService:
             )
     
     async def check_redis(self) -> ComponentHealth:
-        """Verifica saúde do Redis"""
         try:
             redis = self.dependencies.get('redis')
             if redis:
@@ -69,7 +65,6 @@ class HealthCheckService:
             )
     
     async def check_vector_store(self) -> ComponentHealth:
-        """Verifica saúde do Qdrant"""
         try:
             qdrant = self.dependencies.get('vector_store')
             if qdrant:
@@ -92,14 +87,11 @@ class HealthCheckService:
             )
     
     async def check_external_services(self) -> List[ComponentHealth]:
-        """Verifica APIs externas"""
         results = []
-        
-        # Exemplo: Verificar Groq API
+
         try:
             groq = self.dependencies.get('groq_client')
             if groq:
-                # Fazer chamada de teste leve
                 results.append(ComponentHealth(
                     name="groq_api",
                     status=HealthStatus.HEALTHY,
@@ -115,7 +107,6 @@ class HealthCheckService:
         return results
     
     def get_system_metrics(self) -> Dict[str, Any]:
-        """Coleta métricas do sistema"""
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
@@ -138,8 +129,6 @@ class HealthCheckService:
         }
     
     async def full_health_check(self) -> Dict[str, Any]:
-        """Executa health check completo"""
-        # Executa checks em paralelo
         results = await asyncio.gather(
             self.check_database(),
             self.check_redis(),
@@ -147,8 +136,7 @@ class HealthCheckService:
             self.check_external_services(),
             return_exceptions=True
         )
-        
-        # Processa resultados
+
         components = []
         overall_status = HealthStatus.HEALTHY
         
@@ -158,14 +146,12 @@ class HealthCheckService:
             elif isinstance(result, ComponentHealth):
                 components.append(result)
             else:
-                # Erro na execução
                 components.append(ComponentHealth(
                     name="unknown",
                     status=HealthStatus.UNHEALTHY,
                     message=str(result)
                 ))
-        
-        # Determina status geral
+
         for component in components:
             if component.status == HealthStatus.UNHEALTHY:
                 overall_status = HealthStatus.UNHEALTHY
@@ -189,21 +175,18 @@ class HealthCheckService:
             "system": self.get_system_metrics()
         }
 
-# Router para health checks
 health_router = APIRouter(tags=["Health"])
 
 @health_router.get("/health", response_model=Dict[str, Any])
 async def health_check(
     health_service: HealthCheckService = Depends()
 ):
-    """Health check completo do sistema"""
     result = await health_service.full_health_check()
-    
-    # Define status code baseado no status
+
     if result["status"] == HealthStatus.HEALTHY:
         status_code = status.HTTP_200_OK
     elif result["status"] == HealthStatus.DEGRADED:
-        status_code = status.HTTP_200_OK  # Ou 207 MULTI_STATUS
+        status_code = status.HTTP_200_OK
     else:
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     
@@ -211,14 +194,12 @@ async def health_check(
 
 @health_router.get("/health/live")
 async def liveness_probe():
-    """Liveness probe simples para Kubernetes"""
     return {"status": "alive"}
 
 @health_router.get("/health/ready")
 async def readiness_probe(
     health_service: HealthCheckService = Depends()
 ):
-    """Readiness probe para Kubernetes"""
     result = await health_service.full_health_check()
     
     if result["status"] == HealthStatus.UNHEALTHY:

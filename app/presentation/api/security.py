@@ -13,17 +13,12 @@ settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    # bcrypt tem limite de 72 bytes para senhas
-    # Truncamos para evitar erro
     password_bytes = password.encode('utf-8')
     if len(password_bytes) > 72:
         password = password_bytes[:72].decode('utf-8', errors='ignore')
 
-    # bcrypt usa 'rounds' - valores típicos: 12 (padrão), 10 (rápido), 14 (seguro)
     rounds = 10 if settings.debug else 12
 
-    # Usa o método recomendado para configurar bcrypt rounds
-    # Prefixo bcrypt__ é necessário para parâmetros específicos do esquema
     return pwd_context.using(bcrypt__rounds=rounds).hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -98,13 +93,13 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
         if payload.get("type") != "access":
             logger.warning("Token não é do tipo 'access'")
             return None
-        
+
         if "sub" not in payload:
             logger.warning("Token sem 'sub' (user_id)")
             return None
-        
+
         return payload
-        
+
     except jwt.ExpiredSignatureError:
         logger.debug("Token expirado")
         return None
@@ -144,24 +139,14 @@ def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 def revoke_token(token: str) -> bool:
-    """
-    Revoga um token adicionando-o à blacklist no Redis.
-
-    Args:
-        token: O token JWT a ser revogado
-
-    Returns:
-        True se o token foi revogado com sucesso, False caso contrário
-    """
     try:
         from app.presentation.api.dependencies import get_jwt_handler
 
-        # Decodifica o token para obter o jti e exp
         payload = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
-            options={"verify_exp": False}  # Permite decodificar token expirado
+            options={"verify_exp": False}
         )
 
         jti = payload.get("jti")
@@ -171,10 +156,8 @@ def revoke_token(token: str) -> bool:
             logger.warning("Token sem jti ou exp - não pode ser revogado")
             return False
 
-        # Converte timestamp para datetime
         exp_datetime = datetime.fromtimestamp(exp)
 
-        # Usa o JWT handler para revogar
         jwt_handler = get_jwt_handler()
         return jwt_handler.revoke_token(jti, exp_datetime)
 

@@ -25,42 +25,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Constantes de segurança para upload de arquivos
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_FILE_SIZE = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 MAX_FILENAME_LENGTH = 255
 
 
 def sanitize_filename(filename: str) -> str:
-    """
-    Sanitiza nome de arquivo para prevenir path traversal e outros ataques.
-
-    Args:
-        filename: Nome do arquivo original
-
-    Returns:
-        Nome de arquivo sanitizado e seguro
-    """
     if not filename:
         return "unnamed_file"
 
-    # Usar apenas o basename (remove qualquer path)
     safe_name = os.path.basename(filename)
 
-    # Remover caracteres perigosos
     safe_name = "".join(c for c in safe_name if c.isalnum() or c in "._- ")
     safe_name = safe_name.strip()
 
-    # Garantir que não começa com ponto (arquivos ocultos)
     if safe_name.startswith('.'):
         safe_name = 'file' + safe_name
 
-    # Limitar tamanho
     if len(safe_name) > MAX_FILENAME_LENGTH:
         name_part, ext_part = os.path.splitext(safe_name)
         safe_name = name_part[:MAX_FILENAME_LENGTH - len(ext_part)] + ext_part
 
-    # Se ficou vazio após sanitização, usar nome padrão
     if not safe_name or safe_name == '.':
         safe_name = "unnamed_file"
 
@@ -68,25 +53,12 @@ def sanitize_filename(filename: str) -> str:
 
 
 def validate_file_extension(filename: str) -> str:
-    """
-    Valida e extrai extensão do arquivo.
-
-    Args:
-        filename: Nome do arquivo
-
-    Returns:
-        Extensão do arquivo em lowercase com ponto (ex: '.pdf')
-
-    Raises:
-        HTTPException: Se extensão for inválida ou não suportada
-    """
     if not filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nome de arquivo não fornecido"
         )
 
-    # Usar pathlib para extrair extensão de forma segura
     file_path = Path(filename)
     file_ext = file_path.suffix.lower()
 
@@ -106,23 +78,10 @@ def validate_file_extension(filename: str) -> str:
 
 
 async def validate_file_size(file: UploadFile) -> bytes:
-    """
-    Valida tamanho do arquivo e retorna conteúdo.
-
-    Args:
-        file: Arquivo enviado
-
-    Returns:
-        Conteúdo do arquivo em bytes
-
-    Raises:
-        HTTPException: Se arquivo for muito grande
-    """
-    # Ler arquivo em chunks para não carregar tudo na memória de uma vez
     content_chunks = []
     total_size = 0
 
-    chunk_size = 1024 * 1024  # 1MB chunks
+    chunk_size = 1024 * 1024
 
     while True:
         chunk = await file.read(chunk_size)
@@ -244,7 +203,6 @@ async def upload_file(
     current_admin: Dict[str, Any] = Depends(get_current_admin_user),
 ) -> Dict[str, Any]:
     try:
-        # Sanitizar nome do arquivo
         safe_filename = sanitize_filename(file.filename or "")
 
         logger.info(
@@ -253,10 +211,8 @@ async def upload_file(
             f"admin_user={current_admin['username']}"
         )
 
-        # Validar extensão do arquivo
         file_ext = validate_file_extension(safe_filename)
 
-        # Validar tamanho e ler conteúdo
         content_bytes = await validate_file_size(file)
         
         if file_ext in {".txt", ".md"}:
@@ -336,7 +292,6 @@ async def upload_file(
             if tags_list:
                 metadata["tags"] = tags_list
 
-        # Extrair título do nome do arquivo (sem extensão)
         title = Path(safe_filename).stem if safe_filename else "Documento sem título"
         
         result = ingest_uc.execute(

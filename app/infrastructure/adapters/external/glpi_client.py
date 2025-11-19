@@ -16,7 +16,6 @@ class GLPIClient:
         password: str = "",
         table_prefix: str = "glpi_",
     ):
-        # Validar table_prefix para prevenir SQL injection
         if not re.match(r'^[a-z0-9_]+$', table_prefix):
             raise ValueError(
                 f"Invalid table_prefix '{table_prefix}'. "
@@ -128,20 +127,8 @@ class GLPIClient:
         min_content_length: int = 50,
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Get all articles (knowledge base + FAQs) from GLPI.
-
-        Args:
-            include_private: Whether to include private articles (currently not used)
-            min_content_length: Minimum content length
-            limit: Maximum number of articles to return
-
-        Returns:
-            List of articles with enriched metadata
-        """
-        # Fetch both knowledge base articles and FAQs
         kb_articles = self.fetch_knowledge_base_articles(
-            limit=None,  # We'll limit after combining
+            limit=None,
             min_content_length=min_content_length
         )
 
@@ -150,7 +137,6 @@ class GLPIClient:
             min_content_length=min_content_length
         )
 
-        # Enrich articles with metadata
         all_articles = []
 
         for article in kb_articles:
@@ -159,7 +145,7 @@ class GLPIClient:
                 'date_creation': article.get('date_creation'),
                 'date_mod': article.get('date_mod'),
                 'author': article.get('author_id'),
-                'visibility': 'public',  # Assuming public for now
+                'visibility': 'public',
             }
             all_articles.append(article)
 
@@ -173,10 +159,8 @@ class GLPIClient:
             }
             all_articles.append(faq)
 
-        # Sort by modification date (most recent first)
         all_articles.sort(key=lambda x: x.get('date_mod', ''), reverse=True)
 
-        # Apply limit if specified
         if limit:
             all_articles = all_articles[:limit]
 

@@ -150,18 +150,6 @@ class AnswerGenerator:
         content: Optional[str],
         metadata: Dict[str, Any]
     ) -> str:
-        """Constrói snippet formatado do documento.
-
-        Delegado para SnippetBuilder utilitário (evita duplicação).
-
-        Args:
-            title: Título do documento
-            content: Conteúdo do documento
-            metadata: Metadados do documento
-
-        Returns:
-            Snippet formatado
-        """
         return SnippetBuilder.build(title, content, metadata)
     
     def format_sources(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

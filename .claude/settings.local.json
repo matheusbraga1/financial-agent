@@ -34,7 +34,8 @@
       "Bash(powershell -Command \"Stop-Process -Id 27336 -Force\")",
       "Bash(for:*)",
       "Bash(do curl -s http://localhost:8001/ -w '\\nStatus: %{http_code}\\n')",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

@@ -22,7 +22,6 @@ class HybridLLMAdapter:
         else:
             self.model_name = getattr(ollama_adapter, "model_name", "ollama/unknown")
 
-        # Verifica disponibilidade dos adapters
         groq_available = groq_adapter is not None
         ollama_available = getattr(ollama_adapter, 'is_available', False) if ollama_adapter else False
 
@@ -63,7 +62,6 @@ class HybridLLMAdapter:
                 )
 
         if fallback:
-            # Verifica se o fallback está disponível antes de tentar usar
             is_available = getattr(fallback, 'is_available', True)
 
             if not is_available:
@@ -121,7 +119,6 @@ class HybridLLMAdapter:
                 )
 
         if fallback:
-            # Verifica se o fallback está disponível antes de tentar usar
             is_available = getattr(fallback, 'is_available', True)
 
             if not is_available:

@@ -62,34 +62,19 @@ def create_application() -> FastAPI:
     return app
 
 def get_real_client_ip(request: Request) -> str:
-    """
-    Obtém o IP real do cliente considerando proxies e load balancers.
-
-    Args:
-        request: Request do FastAPI
-
-    Returns:
-        IP do cliente
-    """
-    # Tentar X-Forwarded-For primeiro (comum em proxies)
     if x_forwarded_for := request.headers.get("X-Forwarded-For"):
-        # X-Forwarded-For pode ter múltiplos IPs, pegar o primeiro (cliente original)
         return x_forwarded_for.split(",")[0].strip()
 
-    # Tentar X-Real-IP (usado por nginx)
     if x_real_ip := request.headers.get("X-Real-IP"):
         return x_real_ip.strip()
 
-    # Fallback para IP direto
     return get_remote_address(request)
 
 
 def _configure_rate_limiting(app: FastAPI) -> None:
-    """Configura rate limiting global e por endpoint."""
-
     limiter = Limiter(
-        key_func=get_real_client_ip,  # Usar função que considera proxies
-        default_limits=["50/minute"],  # Reduzido de 100 para 50
+        key_func=get_real_client_ip,
+        default_limits=["50/minute"],
     )
 
     app.state.limiter = limiter

@@ -29,18 +29,19 @@ class ManageConversationUseCase:
         return sid
     
     def get_history(
-        self, 
-        session_id: str, 
+        self,
+        session_id: str,
         user_id: Optional[str] = None,
         limit: int = 200
     ) -> List[Dict[str, Any]]:
         if not user_id:
             return []
-        
+
         try:
             return self.conversations.get_history(
                 session_id=session_id,
-                limit=limit
+                limit=limit,
+                user_id=user_id
             )
         except Exception as e:
             logger.warning(f"Erro ao buscar histórico: {e}")
@@ -141,17 +142,6 @@ class ManageConversationUseCase:
         limit: int = 20,
         offset: int = 0
     ) -> Dict[str, Any]:
-        """
-        Lista sessões do usuário com paginação.
-
-        Args:
-            user_id: ID do usuário
-            limit: Número máximo de sessões a retornar
-            offset: Offset para paginação
-
-        Returns:
-            Dicionário com sessions (lista), total, limit, offset e has_more
-        """
         try:
             sessions = self.conversations.get_user_sessions(
                 user_id=user_id,

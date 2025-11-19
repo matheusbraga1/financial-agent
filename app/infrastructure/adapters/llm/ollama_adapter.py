@@ -21,7 +21,6 @@ class OllamaAdapter:
         self.model_name = f"ollama/{model}"
         self.is_available = False
 
-        # Health check durante inicialização
         self._check_availability()
 
         logger.info(
@@ -30,16 +29,13 @@ class OllamaAdapter:
         )
 
     def _check_availability(self) -> None:
-        """Verifica se o Ollama está disponível e se o modelo existe"""
         try:
-            # Testa conexão com Ollama
             response = requests.get(
                 f"{self.host}/api/tags",
                 timeout=5,
             )
             response.raise_for_status()
 
-            # Verifica se o modelo existe
             data = response.json()
             models = data.get("models", [])
             model_names = [m.get("name", "") for m in models]
@@ -52,7 +48,6 @@ class OllamaAdapter:
                     f"Modelo {self.model} não encontrado no Ollama. "
                     f"Modelos disponíveis: {', '.join(model_names)}"
                 )
-                # Se o modelo não existe, tenta usar o primeiro disponível
                 if model_names:
                     self.model = model_names[0]
                     self.model_name = f"ollama/{self.model}"
@@ -71,7 +66,6 @@ class OllamaAdapter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> str:
-        """Gera resposta usando Ollama"""
         if not self.is_available:
             raise RuntimeError(f"Ollama não está disponível em {self.host}")
 
@@ -119,7 +113,6 @@ class OllamaAdapter:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
     ) -> Iterator[str]:
-        """Streaming de resposta usando Ollama"""
         if not self.is_available:
             raise RuntimeError(f"Ollama não está disponível em {self.host}")
 

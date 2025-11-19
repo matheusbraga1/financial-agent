@@ -1,5 +1,3 @@
-"""Processador de documentos multi-formato (PDF, DOCx, TXT, HTML)."""
-
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
@@ -12,36 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
-    """
-    Processa documentos de diferentes formatos e os converte em chunks para indexação.
-
-    Formatos suportados:
-    - PDF (.pdf)
-    - Word (.docx)
-    - Excel (.xlsx) - opcional
-    - Texto (.txt)
-    - HTML (.html)
-    """
-
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):
-        """
-        Args:
-            chunk_size: Tamanho máximo de cada chunk em caracteres
-            chunk_overlap: Sobreposição entre chunks para manter contexto
-        """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
     def extract_text_from_pdf(self, pdf_path: Path) -> str:
-        """
-        Extrai texto de um arquivo PDF.
-
-        Args:
-            pdf_path: Caminho para o arquivo PDF
-
-        Returns:
-            Texto extraído
-        """
         try:
             import fitz  # PyMuPDF
 
@@ -62,27 +35,16 @@ class DocumentProcessor:
             raise
 
     def extract_text_from_docx(self, docx_path: Path) -> str:
-        """
-        Extrai texto de um arquivo Word (.docx).
-
-        Args:
-            docx_path: Caminho para o arquivo DOCX
-
-        Returns:
-            Texto extraído
-        """
         try:
             from docx import Document
 
             doc = Document(docx_path)
             full_text = []
 
-            # Extrair parágrafos
             for para in doc.paragraphs:
                 if para.text.strip():
                     full_text.append(para.text)
 
-            # Extrair tabelas
             for table in doc.tables:
                 for row in table.rows:
                     row_text = " | ".join(cell.text.strip() for cell in row.cells)
@@ -98,17 +60,7 @@ class DocumentProcessor:
             raise
 
     def extract_text_from_txt(self, txt_path: Path) -> str:
-        """
-        Extrai texto de arquivo TXT.
-
-        Args:
-            txt_path: Caminho para o arquivo TXT
-
-        Returns:
-            Texto extraído
-        """
         try:
-            # Tentar diferentes encodings
             encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
 
             for encoding in encodings:
@@ -127,15 +79,6 @@ class DocumentProcessor:
             raise
 
     def extract_text_from_html(self, html_path: Path) -> str:
-        """
-        Extrai texto de arquivo HTML.
-
-        Args:
-            html_path: Caminho para o arquivo HTML
-
-        Returns:
-            Texto extraído (sem tags HTML)
-        """
         try:
             from bs4 import BeautifulSoup
 
@@ -144,13 +87,11 @@ class DocumentProcessor:
 
             soup = BeautifulSoup(html_content, 'html.parser')
 
-            # Remover scripts e styles
             for script in soup(["script", "style"]):
                 script.decompose()
 
             text = soup.get_text(separator='\n')
 
-            # Limpar linhas vazias
             lines = [line.strip() for line in text.splitlines() if line.strip()]
             text = '\n'.join(lines)
 
@@ -162,18 +103,6 @@ class DocumentProcessor:
             raise
 
     def extract_text(self, file_path: Path) -> str:
-        """
-        Extrai texto de um arquivo baseado em sua extensão.
-
-        Args:
-            file_path: Caminho para o arquivo
-
-        Returns:
-            Texto extraído
-
-        Raises:
-            ValueError: Se formato não for suportado
-        """
         suffix = file_path.suffix.lower()
 
         extractors = {
@@ -194,16 +123,6 @@ class DocumentProcessor:
         return extractor(file_path)
 
     def chunk_text(self, text: str) -> List[str]:
-        """
-        Divide texto em chunks com overlap para manter contexto.
-
-        Args:
-            text: Texto completo do documento
-
-        Returns:
-            Lista de chunks de texto
-        """
-        # Limpar texto
         text = self._clean_text(text)
 
         if len(text) <= self.chunk_size:
@@ -215,14 +134,11 @@ class DocumentProcessor:
         while start < len(text):
             end = start + self.chunk_size
 
-            # Se não é o último chunk, tentar quebrar em parágrafo/sentença
             if end < len(text):
-                # Procurar quebra de parágrafo
                 paragraph_break = text.rfind('\n\n', start, end)
                 if paragraph_break != -1 and paragraph_break > start:
                     end = paragraph_break
 
-                # Se não achou parágrafo, procurar quebra de sentença
                 elif end < len(text):
                     sentence_breaks = ['. ', '! ', '? ', '.\n']
                     for sep in sentence_breaks:
@@ -235,29 +151,16 @@ class DocumentProcessor:
             if chunk:
                 chunks.append(chunk)
 
-            # Próximo chunk com overlap
             start = end - self.chunk_overlap if end < len(text) else end
 
         logger.debug(f"Texto dividido em {len(chunks)} chunks")
         return chunks
 
     def _clean_text(self, text: str) -> str:
-        """
-        Limpa texto removendo espaços excessivos e caracteres especiais.
-
-        Args:
-            text: Texto bruto
-
-        Returns:
-            Texto limpo
-        """
-        # Remover múltiplos espaços
         text = re.sub(r' +', ' ', text)
 
-        # Remover múltiplas quebras de linha (manter no máximo 2)
         text = re.sub(r'\n{3,}', '\n\n', text)
 
-        # Remover espaços no início/fim de cada linha
         lines = [line.strip() for line in text.split('\n')]
         text = '\n'.join(lines)
 
@@ -268,33 +171,20 @@ class DocumentProcessor:
         file_path: Path,
         metadata: DocumentMetadata
     ) -> List[ChunkMetadata]:
-        """
-        Processa um documento completo e retorna chunks com metadados.
-
-        Args:
-            file_path: Caminho para o arquivo
-            metadata: Metadados do documento
-
-        Returns:
-            Lista de ChunkMetadata prontos para indexação
-        """
         logger.info(f"Processando documento: {file_path.name}")
 
-        # Extrair texto
         full_text = self.extract_text(file_path)
 
         if not full_text or len(full_text) < 10:
             logger.warning(f"Documento vazio ou muito curto: {file_path.name}")
             return []
 
-        # Dividir em chunks
         chunks = self.chunk_text(full_text)
 
         if not chunks:
             logger.warning(f"Nenhum chunk gerado para: {file_path.name}")
             return []
 
-        # Criar ChunkMetadata para cada chunk
         chunk_metadata_list = []
         for idx, chunk_text in enumerate(chunks):
             chunk_meta = ChunkMetadata.from_document_metadata(
@@ -313,15 +203,6 @@ class DocumentProcessor:
         return chunk_metadata_list
 
     def get_document_stats(self, file_path: Path) -> Dict[str, Any]:
-        """
-        Retorna estatísticas sobre um documento sem processá-lo completamente.
-
-        Args:
-            file_path: Caminho para o arquivo
-
-        Returns:
-            Dict com estatísticas (tamanho, número de páginas, etc.)
-        """
         stats = {
             "file_name": file_path.name,
             "file_size_bytes": file_path.stat().st_size,

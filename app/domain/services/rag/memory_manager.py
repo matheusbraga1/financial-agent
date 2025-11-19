@@ -79,11 +79,10 @@ class MemoryManager:
 
             vector = self.embeddings.encode_document(title, content)
 
-            # Preparar payload com todos os metadados necessários
             payload = {
                 "title": title,
                 "content": content,
-                "search_text": f"{title} {content}",  # Para busca BM25
+                "search_text": f"{title} {content}",
                 "doc_type": "qa_memory",
                 "department": primary_department or "Geral",
                 "departments": detected_departments or ["Geral"],
@@ -107,7 +106,6 @@ class MemoryManager:
                 "helpful_votes": 0,
             }
 
-            # Usar o método correto do adapter
             self.vector_store.upsert_point(
                 point_id=memory_id,
                 vector=vector,

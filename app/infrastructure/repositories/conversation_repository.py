@@ -122,14 +122,22 @@ class SQLiteConversationRepository:
     def create_session(self, session_id: str, user_id: Optional[str] = None) -> None:
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT 1 FROM conversations WHERE session_id=?", (session_id,))
-            
-            if cur.fetchone() is None:
+            cur.execute("SELECT user_id FROM conversations WHERE session_id=?", (session_id,))
+            existing = cur.fetchone()
+
+            if existing is None:
                 cur.execute(
                     "INSERT INTO conversations(session_id, user_id, created_at) VALUES(?,?,?)",
                     (session_id, user_id, datetime.utcnow().isoformat()),
                 )
                 conn.commit()
+            elif user_id and (not existing[0] or existing[0] == ''):
+                cur.execute(
+                    "UPDATE conversations SET user_id=? WHERE session_id=?",
+                    (user_id, session_id),
+                )
+                conn.commit()
+                logger.info(f"Sessão {session_id} migrada de anônima para user_id={user_id}")
     
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
@@ -178,9 +186,34 @@ class SQLiteConversationRepository:
             conn.commit()
             return cur.lastrowid
     
-    def get_history(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_history(
+        self,
+        session_id: str,
+        limit: int = 100,
+        user_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
+
+            if user_id:
+                cur.execute(
+                    "SELECT user_id FROM conversations WHERE session_id=?",
+                    (session_id,)
+                )
+                session_row = cur.fetchone()
+
+                if not session_row:
+                    logger.warning(f"Sessão {session_id} não encontrada")
+                    return []
+
+                session_user_id = session_row[0]
+                if session_user_id and str(session_user_id) != str(user_id):
+                    logger.warning(
+                        f"Usuário {user_id} tentou acessar histórico da sessão {session_id} "
+                        f"que pertence ao usuário {session_user_id}"
+                    )
+                    return []
+
             cur.execute(
                 "SELECT id, role, content, answer, sources_json, model_used, confidence, timestamp "
                 "FROM messages WHERE session_id=? ORDER BY id ASC LIMIT ?",
@@ -251,7 +284,6 @@ class SQLiteConversationRepository:
             return [dict(r) for r in rows]
 
     def get_user_sessions_count(self, user_id: str) -> int:
-        """Retorna o total de sessões do usuário."""
         with self._lock, self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
