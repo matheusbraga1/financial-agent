@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:3b"
     ollama_timeout: int = 120
+    ollama_max_tokens: int = 2048
 
     embedding_model: str = "intfloat/multilingual-e5-large"
     embedding_dimension: int = 1024

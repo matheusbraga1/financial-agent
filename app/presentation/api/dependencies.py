@@ -157,6 +157,7 @@ def get_llm_adapter():
             temperature=settings.llm_temperature,
             top_p=settings.llm_top_p,
             timeout=settings.ollama_timeout,
+            max_tokens=settings.ollama_max_tokens,
         )
     
     else:
@@ -182,6 +183,7 @@ def get_llm_adapter():
             temperature=settings.llm_temperature,
             top_p=settings.llm_top_p,
             timeout=settings.ollama_timeout,
+            max_tokens=settings.ollama_max_tokens,
         )
         
         return HybridLLMAdapter(

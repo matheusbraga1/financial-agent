@@ -1,10 +1,14 @@
 from typing import Optional, Iterator
+import json
 import logging
+
 import requests
 
 logger = logging.getLogger(__name__)
 
 class OllamaAdapter:
+    """Adapter for Ollama LLM API integration."""
+
     def __init__(
         self,
         host: str = "http://localhost:11434",
@@ -12,12 +16,14 @@ class OllamaAdapter:
         temperature: float = 0.2,
         top_p: float = 0.9,
         timeout: int = 120,
+        max_tokens: int = 2048,
     ):
         self.host = host.rstrip("/")
         self.model = model
         self.temperature = temperature
         self.top_p = top_p
         self.timeout = timeout
+        self.max_tokens = max_tokens
         self.model_name = f"ollama/{model}"
         self.is_available = False
 
@@ -25,7 +31,7 @@ class OllamaAdapter:
 
         logger.info(
             f"OllamaAdapter inicializado: host={host}, modelo={model}, "
-            f"disponível={'✓' if self.is_available else '✗'}"
+            f"max_tokens={max_tokens}, disponível={'✓' if self.is_available else '✗'}"
         )
 
     def _check_availability(self) -> None:
@@ -82,8 +88,8 @@ class OllamaAdapter:
         if system_prompt:
             payload["system"] = system_prompt
 
-        if max_tokens:
-            payload["options"]["num_predict"] = max_tokens
+        effective_max_tokens = max_tokens or self.max_tokens
+        payload["options"]["num_predict"] = effective_max_tokens
 
         try:
             response = requests.post(
@@ -112,9 +118,26 @@ class OllamaAdapter:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
+        """Stream tokens from Ollama API.
+
+        Args:
+            prompt: The input prompt for generation.
+            system_prompt: Optional system prompt for context.
+            temperature: Optional temperature override.
+            max_tokens: Optional max tokens override.
+
+        Yields:
+            Generated tokens as strings.
+
+        Raises:
+            RuntimeError: If Ollama is not available.
+        """
         if not self.is_available:
             raise RuntimeError(f"Ollama não está disponível em {self.host}")
+
+        effective_max_tokens = max_tokens or self.max_tokens
 
         payload = {
             "model": self.model,
@@ -123,6 +146,7 @@ class OllamaAdapter:
             "options": {
                 "temperature": temperature or self.temperature,
                 "top_p": self.top_p,
+                "num_predict": effective_max_tokens,
             }
         }
 
@@ -140,7 +164,6 @@ class OllamaAdapter:
 
             for line in response.iter_lines():
                 if line:
-                    import json
                     chunk = json.loads(line)
 
                     if "response" in chunk:
@@ -151,6 +174,9 @@ class OllamaAdapter:
 
             logger.debug("Ollama streaming concluído")
 
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout no streaming Ollama ({self.timeout}s)")
+            raise
         except Exception as e:
             logger.error(f"Erro no streaming Ollama: {e}")
             raise

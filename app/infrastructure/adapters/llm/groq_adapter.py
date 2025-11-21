@@ -73,36 +73,50 @@ class GroqAdapter:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
+        """Stream tokens from Groq API.
+
+        Args:
+            prompt: The input prompt for generation.
+            system_prompt: Optional system prompt for context.
+            temperature: Optional temperature override.
+            max_tokens: Optional max tokens override.
+
+        Yields:
+            Generated tokens as strings.
+        """
         messages = []
-        
+
         if system_prompt:
             messages.append({
                 "role": "system",
                 "content": system_prompt
             })
-        
+
         messages.append({
             "role": "user",
             "content": prompt
         })
-        
+
+        effective_max_tokens = max_tokens or self.max_tokens
+
         try:
             stream = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=temperature or self.temperature,
                 top_p=self.top_p,
-                max_tokens=self.max_tokens,
+                max_tokens=effective_max_tokens,
                 stream=True,
             )
-            
+
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
-            
+
             logger.debug("Groq streaming concluído")
-            
+
         except Exception as e:
             logger.error(f"Erro no streaming Groq: {e}")
             raise

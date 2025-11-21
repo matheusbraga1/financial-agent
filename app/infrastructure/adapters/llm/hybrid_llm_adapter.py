@@ -96,7 +96,22 @@ class HybridLLMAdapter:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
+        """Stream tokens from the primary or fallback LLM provider.
+
+        Args:
+            prompt: The input prompt for generation.
+            system_prompt: Optional system prompt for context.
+            temperature: Optional temperature override.
+            max_tokens: Optional max tokens override.
+
+        Yields:
+            Generated tokens as strings.
+
+        Raises:
+            RuntimeError: If no LLM provider is available.
+        """
         primary = self.groq if self.prefer_groq else self.ollama
         fallback = self.ollama if self.prefer_groq else self.groq
 
@@ -108,6 +123,7 @@ class HybridLLMAdapter:
                     prompt=prompt,
                     system_prompt=system_prompt,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                 )
 
                 logger.info(f"Streaming concluído com {primary.model_name}")
@@ -136,6 +152,7 @@ class HybridLLMAdapter:
                     prompt=prompt,
                     system_prompt=system_prompt,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                 )
 
                 logger.info(f"Streaming concluído com fallback {fallback.model_name}")
