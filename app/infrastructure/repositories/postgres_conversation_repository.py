@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
@@ -7,7 +7,10 @@ from psycopg.types.json import Json
 from contextlib import contextmanager
 import uuid
 
+from app.infrastructure.logging import StructuredLogger
+
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class PostgresConversationRepository:
     def __init__(
@@ -85,9 +88,17 @@ class PostgresConversationRepository:
                 result = cur.fetchone()
 
                 if result and result["inserted"]:
-                    logger.info(f"Session created: {session_id}")
+                    structured_logger.log_session_created(
+                        session_id=session_id,
+                        user_id=str(user_id) if user_id else None
+                    )
                 elif result:
-                    logger.info(f"Session {session_id} migrated to user_id={user_id}")
+                    structured_logger.log_db_success(
+                        operation="UPDATE",
+                        table="conversations",
+                        affected=1,
+                        session_id=session_id
+                    )
 
                 return session_id
 
@@ -145,7 +156,11 @@ class PostgresConversationRepository:
                     )
 
                 message_id = cur.fetchone()["id"]
-                logger.debug(f"Message added: session={session_id}, role={role}, id={message_id}")
+                structured_logger.log_message_persisted(
+                    session_id=session_id,
+                    role=role,
+                    message_id=message_id
+                )
 
                 return message_id
 
@@ -244,20 +259,26 @@ class PostgresConversationRepository:
                 )
 
                 feedback_id = cur.fetchone()["id"]
-                logger.debug(f"Feedback added: message={message_id}, rating={rating}")
+                structured_logger.log_db_success(
+                    operation="INSERT",
+                    table="feedback",
+                    affected=1,
+                    message_id=message_id,
+                    rating=rating
+                )
 
                 return feedback_id
 
     def get_user_sessions(
         self,
-        user_id: int,
+        user_id: Union[int, str],
         limit: int = 100,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
+        user_id_int = int(user_id) if isinstance(user_id, str) else user_id
+
         with self._get_connection() as conn:
             with conn.cursor() as cur:
-                # Optimized: Use LATERAL JOIN instead of correlated subquery
-                # and DISTINCT ON for getting last message efficiently
                 cur.execute(
                     """
                     SELECT
@@ -285,13 +306,15 @@ class PostgresConversationRepository:
                     ORDER BY c.updated_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset),
+                    (user_id_int, limit, offset),
                 )
                 rows = cur.fetchall()
 
                 return [dict(r) for r in rows]
 
-    def get_user_sessions_count(self, user_id: int) -> int:
+    def get_user_sessions_count(self, user_id: Union[int, str]) -> int:
+        user_id_int = int(user_id) if isinstance(user_id, str) else user_id
+
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -300,7 +323,7 @@ class PostgresConversationRepository:
                     FROM conversations
                     WHERE user_id = %s
                     """,
-                    (user_id,),
+                    (user_id_int,),
                 )
                 row = cur.fetchone()
 
@@ -316,7 +339,12 @@ class PostgresConversationRepository:
                 deleted = cur.rowcount > 0
 
                 if deleted:
-                    logger.info(f"Session deleted: {session_id}")
+                    structured_logger.log_db_success(
+                        operation="DELETE",
+                        table="conversations",
+                        affected=1,
+                        session_id=session_id
+                    )
 
                 return deleted
 

@@ -1,8 +1,12 @@
 from typing import List, Dict, Any, Optional
 import asyncio
 import logging
+import time
+
+from app.infrastructure.logging import StructuredLogger
 
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class GenerateAnswerUseCase:
     def __init__(
@@ -34,8 +38,12 @@ class GenerateAnswerUseCase:
     ) -> Dict[str, Any]:
         if not question or not question.strip():
             raise ValueError("Pergunta não pode estar vazia")
-        
-        logger.info(f"Iniciando pipeline RAG para: '{question[:100]}...'")
+
+        start_time = time.time()
+        structured_logger.info(
+            "RAG pipeline started",
+            question_length=len(question)
+        )
         
         detected_departments = self.domain_classifier.classify(question)
         
@@ -58,24 +66,29 @@ class GenerateAnswerUseCase:
         if min_score is None:
             min_score = adaptive_params.get("min_score", 0.15)
         
-        logger.info(
-            f"Parâmetros: top_k={top_k}, min_score={min_score} "
-            f"({adaptive_params.get('reason')})"
-        )
-        
         primary_domain = detected_departments[0] if detected_departments else None
         expanded_question = self.query_processor.expand(question, primary_domain)
-        
-        logger.info(f"Query expandida: '{expanded_question[:100]}...'")
-        
+
+        structured_logger.log_search_start(
+            query=expanded_question,
+            top_k=top_k
+        )
+
+        search_start = time.time()
         documents = self.document_retriever.retrieve(
             query=expanded_question,
             top_k=top_k,
             min_score=min_score,
             departments=detected_departments if detected_departments else None,
         )
-        
-        logger.info(f"Documentos recuperados (após pipeline): {len(documents)}")
+        search_duration = (time.time() - search_start) * 1000
+
+        top_score = max((d.get("score", 0.0) for d in documents), default=0.0)
+        structured_logger.log_search_results(
+            results_count=len(documents),
+            top_score=top_score,
+            duration_ms=search_duration
+        )
         
         documents = self.document_retriever.normalize_documents(documents)
         
@@ -154,11 +167,15 @@ class GenerateAnswerUseCase:
         except Exception as e:
             logger.debug(f"Falha ao armazenar memória: {e}")
         
-        logger.info(
-            f"Pipeline concluído: {len(answer_text)} chars, "
-            f"{len(sources)} fontes, confidence={confidence:.2f}"
+        total_duration = (time.time() - start_time) * 1000
+        structured_logger.info(
+            "RAG pipeline completed",
+            answer_length=len(answer_text),
+            sources_count=len(sources),
+            confidence=round(confidence, 2),
+            duration_ms=round(total_duration, 0)
         )
-        
+
         return {
             "answer": answer_text,
             "sources": sources,

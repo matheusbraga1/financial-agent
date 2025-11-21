@@ -1,10 +1,14 @@
 from typing import Optional, Iterator
 import json
 import logging
+import time
 
 import requests
 
+from app.infrastructure.logging import StructuredLogger
+
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class OllamaAdapter:
     """Adapter for Ollama LLM API integration."""
@@ -91,6 +95,14 @@ class OllamaAdapter:
         effective_max_tokens = max_tokens or self.max_tokens
         payload["options"]["num_predict"] = effective_max_tokens
 
+        structured_logger.log_llm_request(
+            provider="ollama",
+            model=self.model,
+            prompt_length=len(prompt)
+        )
+
+        start_time = time.time()
+
         try:
             response = requests.post(
                 f"{self.host}/api/generate",
@@ -101,16 +113,30 @@ class OllamaAdapter:
 
             result = response.json()
             content = result.get("response", "")
+            duration_ms = (time.time() - start_time) * 1000
 
-            logger.debug(f"Ollama resposta gerada: {len(content)} chars")
+            structured_logger.log_llm_response(
+                provider="ollama",
+                model=self.model,
+                tokens=len(content.split()),
+                duration_ms=duration_ms
+            )
 
             return content
 
         except requests.exceptions.Timeout:
-            logger.error(f"Timeout ao chamar Ollama ({self.timeout}s)")
+            structured_logger.log_llm_error(
+                provider="ollama",
+                model=self.model,
+                error=f"Timeout ({self.timeout}s)"
+            )
             raise
         except Exception as e:
-            logger.error(f"Erro ao chamar Ollama: {e}")
+            structured_logger.log_llm_error(
+                provider="ollama",
+                model=self.model,
+                error=str(e)
+            )
             raise
 
     def stream(
@@ -153,6 +179,15 @@ class OllamaAdapter:
         if system_prompt:
             payload["system"] = system_prompt
 
+        structured_logger.log_llm_request(
+            provider="ollama",
+            model=self.model,
+            prompt_length=len(prompt)
+        )
+
+        start_time = time.time()
+        token_count = 0
+
         try:
             response = requests.post(
                 f"{self.host}/api/generate",
@@ -167,16 +202,31 @@ class OllamaAdapter:
                     chunk = json.loads(line)
 
                     if "response" in chunk:
+                        token_count += 1
                         yield chunk["response"]
 
                     if chunk.get("done", False):
                         break
 
-            logger.debug("Ollama streaming concluído")
+            duration_ms = (time.time() - start_time) * 1000
+            structured_logger.log_llm_response(
+                provider="ollama",
+                model=self.model,
+                tokens=token_count,
+                duration_ms=duration_ms
+            )
 
         except requests.exceptions.Timeout:
-            logger.error(f"Timeout no streaming Ollama ({self.timeout}s)")
+            structured_logger.log_llm_error(
+                provider="ollama",
+                model=self.model,
+                error=f"Timeout ({self.timeout}s)"
+            )
             raise
         except Exception as e:
-            logger.error(f"Erro no streaming Ollama: {e}")
+            structured_logger.log_llm_error(
+                provider="ollama",
+                model=self.model,
+                error=str(e)
+            )
             raise

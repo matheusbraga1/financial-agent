@@ -2,8 +2,12 @@ from typing import AsyncIterator, Tuple, List, Dict, Any, Optional
 import asyncio
 import threading
 import logging
+import time
+
+from app.infrastructure.logging import StructuredLogger
 
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class StreamAnswerUseCase:
     def __init__(
@@ -43,8 +47,12 @@ class StreamAnswerUseCase:
         full_answer_parts: List[str] = []
         
         try:
-            logger.info(f"Iniciando streaming RAG para: '{question[:100]}...'")
-            
+            start_time = time.time()
+            structured_logger.info(
+                "RAG streaming started",
+                question_length=len(question)
+            )
+
             detected_departments = self.domain_classifier.classify(question)
             
             domain_confidence = 0.0
@@ -62,14 +70,28 @@ class StreamAnswerUseCase:
             
             top_k = adaptive_params.get("top_k", 15)
             min_score = adaptive_params.get("min_score", 0.15)
-            
+
+            structured_logger.log_search_start(
+                query=expanded_q,
+                top_k=top_k
+            )
+
+            search_start = time.time()
             documents = self.document_retriever.retrieve(
                 query=expanded_q,
                 top_k=top_k,
                 min_score=min_score,
                 departments=detected_departments if detected_departments else None,
             )
-            
+            search_duration = (time.time() - search_start) * 1000
+
+            top_score = max((d.get("score", 0.0) for d in documents), default=0.0)
+            structured_logger.log_search_results(
+                results_count=len(documents),
+                top_score=top_score,
+                duration_ms=search_duration
+            )
+
             documents = self.document_retriever.normalize_documents(documents)
             
             if not documents:

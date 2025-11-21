@@ -59,8 +59,8 @@ async def register(
     """
     try:
         structured_logger = get_structured_logger()
-        structured_logger.info(
-            "Tentativa de registro",
+        structured_logger.log_auth_attempt(
+            operation="REGISTER",
             username=request_data.username,
             email=request_data.email
         )
@@ -103,10 +103,11 @@ async def register(
                 detail="Erro ao criar usuário",
             )
 
-        structured_logger.info(
-            "Usuário registrado com sucesso",
+        structured_logger.log_auth_success(
+            operation="REGISTER",
             user_id=user_id,
-            username=request_data.username
+            username=request_data.username,
+            email=request_data.email
         )
 
         user_response = UserResponse(
@@ -157,14 +158,15 @@ async def login(
     """
     try:
         structured_logger = get_structured_logger()
-        structured_logger.info("Tentativa de login", username=login_data.username)
+        structured_logger.log_auth_attempt(operation="LOGIN", username=login_data.username)
 
         user = user_repo.get_user_by_username(login_data.username)
 
         if not user:
-            structured_logger.warning(
-                "Login falhou - usuário não encontrado",
-                username=login_data.username
+            structured_logger.log_auth_failure(
+                operation="LOGIN",
+                username=login_data.username,
+                reason="user_not_found"
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,9 +175,10 @@ async def login(
             )
 
         if not verify_password(login_data.password, user["hashed_password"]):
-            structured_logger.warning(
-                "Login falhou - senha incorreta",
-                username=login_data.username
+            structured_logger.log_auth_failure(
+                operation="LOGIN",
+                username=login_data.username,
+                reason="invalid_password"
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -184,9 +187,10 @@ async def login(
             )
 
         if not user["is_active"]:
-            structured_logger.warning(
-                "Login falhou - usuário inativo",
-                username=login_data.username
+            structured_logger.log_auth_failure(
+                operation="LOGIN",
+                username=login_data.username,
+                reason="user_inactive"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -218,8 +222,8 @@ async def login(
         except Exception as e:
             logger.warning(f"Falha ao armazenar refresh token: {e}")
 
-        structured_logger.info(
-            "Login bem-sucedido",
+        structured_logger.log_auth_success(
+            operation="LOGIN",
             user_id=user["id"],
             username=login_data.username
         )
@@ -263,7 +267,7 @@ async def refresh_token(
     """
     try:
         structured_logger = get_structured_logger()
-        structured_logger.info("Tentativa de refresh token")
+        structured_logger.log_auth_attempt(operation="REFRESH_TOKEN", username="token_holder")
 
         payload = decode_refresh_token(refresh_data.refresh_token)
 
@@ -326,7 +330,11 @@ async def refresh_token(
             logger.warning(f"Falha ao rotacionar refresh token: {e}")
             new_refresh_token = refresh_data.refresh_token
 
-        structured_logger.info("Token renovado com sucesso", user_id=user["id"])
+        structured_logger.log_auth_success(
+            operation="REFRESH_TOKEN",
+            user_id=user["id"],
+            username=user["username"]
+        )
 
         return TokenResponse(
             access_token=access_token,
@@ -403,7 +411,10 @@ async def logout(
     """
     try:
         structured_logger = get_structured_logger()
-        structured_logger.info("Logout iniciado", user_id=current_user["id"])
+        structured_logger.log_auth_attempt(
+            operation="LOGOUT",
+            username=current_user["username"]
+        )
 
         # Revoke access token via blacklist
         auth_header = request.headers.get("Authorization", "")
@@ -437,7 +448,11 @@ async def logout(
                 f"Falha ao deletar refresh tokens do usuário {current_user['id']}: {e}"
             )
 
-        structured_logger.info("Logout processado", user_id=current_user["id"])
+        structured_logger.log_auth_success(
+            operation="LOGOUT",
+            user_id=current_user["id"],
+            username=current_user["username"]
+        )
 
         return ApiResponse(
             success=True,

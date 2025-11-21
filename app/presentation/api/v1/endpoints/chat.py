@@ -59,9 +59,8 @@ async def chat(
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> ChatResponse:
     try:
-        structured_logger.info(
-            "Nova requisição de chat",
-            session_id=request.session_id,
+        structured_logger.log_chat_request(
+            session_id=request.session_id or "new",
             question_length=len(request.question),
             authenticated=current_user is not None
         )
@@ -82,11 +81,7 @@ async def chat(
             cached_response = await cache_service.get(cache_key)
 
             if cached_response:
-                structured_logger.info(
-                    "Resposta recuperada do cache",
-                    cache_key=cache_key,
-                    cache_hit=True
-                )
+                structured_logger.log_cache_hit(key=cache_key)
                 return ChatResponse(**cached_response)
 
         user_id = str(current_user["id"]) if current_user else None
@@ -134,19 +129,16 @@ async def chat(
                     response.dict(),
                     ttl=1800
                 )
-                structured_logger.info(
-                    "Resposta armazenada no cache",
-                    cache_key=cache_key,
-                    ttl=1800
-                )
+                structured_logger.log_cache_set(key=cache_key, ttl=1800)
             except Exception as e:
                 logger.warning(f"Falha ao cachear resposta: {e}")
         
-        structured_logger.info(
-            "Resposta gerada com sucesso",
-            sources_count=len(result['sources']),
+        structured_logger.log_chat_response(
+            session_id=session_id,
             answer_length=len(result['answer']),
-            confidence=round(result['confidence'], 2),
+            sources_count=len(result['sources']),
+            confidence=result['confidence'],
+            model_used=result['model_used'],
             cached=False
         )
         
@@ -189,9 +181,8 @@ async def chat_stream(
     cache_service: CacheService = Depends(get_cache_service),
     structured_logger: StructuredLogger = Depends(get_structured_logger),
 ) -> StreamingResponse:
-    structured_logger.info(
-        "Nova requisição de chat stream",
-        session_id=request.session_id,
+    structured_logger.log_chat_request(
+        session_id=request.session_id or "new",
         question_length=len(request.question) if request.question else 0,
         authenticated=current_user is not None
     )
@@ -213,10 +204,7 @@ async def chat_stream(
                 cached_response = await cache_service.get(cache_key)
 
                 if cached_response:
-                    structured_logger.info(
-                        "Resposta em stream recuperada do cache",
-                        cache_key=cache_key
-                    )
+                    structured_logger.log_cache_hit(key=cache_key)
                     yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'token', 'data': cached_response['answer']}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'sources', 'data': cached_response['sources']}, ensure_ascii=False)}\n\n"
@@ -232,11 +220,9 @@ async def chat_stream(
 
             if current_user:
                 manage_conversation_uc.add_user_message(session_id, request.question)
-                structured_logger.info(
-                    "Mensagem do usuario persistida",
+                structured_logger.log_message_persisted(
                     session_id=session_id,
-                    user_id=current_user.get("id"),
-                    question_length=len(request.question)
+                    role="user"
                 )
 
             history = manage_conversation_uc.get_history(
@@ -309,12 +295,10 @@ async def chat_stream(
                         model_used=model_used,
                         confidence=confidence,
                     )
-                    structured_logger.info(
-                        "Mensagem do assistente persistida",
+                    structured_logger.log_message_persisted(
                         session_id=session_id,
-                        message_id=message_id,
-                        answer_length=len(full_answer),
-                        sources_count=len(sources)
+                        role="assistant",
+                        message_id=message_id
                     )
                 except Exception as e:
                     structured_logger.error(
@@ -345,18 +329,17 @@ async def chat_stream(
                         "session_id": session_id,
                     }
                     await cache_service.set(cache_key, cache_data, ttl=1800)
-                    structured_logger.info(
-                        "Resposta em stream armazenada no cache",
-                        cache_key=cache_key
-                    )
+                    structured_logger.log_cache_set(key=cache_key, ttl=1800)
                 except Exception as e:
                     logger.warning(f"Falha ao cachear stream: {e}")
 
-            structured_logger.info(
-                "Stream concluído com sucesso",
+            structured_logger.log_chat_response(
+                session_id=session_id,
                 answer_length=len(full_answer),
                 sources_count=len(sources),
-                confidence=round(confidence, 2)
+                confidence=confidence,
+                model_used=model_used,
+                cached=False
             )
 
         except GeneratorExit:
@@ -543,7 +526,7 @@ async def list_sessions(
 
         session_infos = [
             SessionInfo(
-                session_id=s["session_id"],
+                session_id=str(s["session_id"]),
                 created_at=s["created_at"],
                 message_count=s.get("message_count", 0),
                 last_message=s.get("last_message", "Nova conversa"),

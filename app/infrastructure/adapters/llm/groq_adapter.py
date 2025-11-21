@@ -1,8 +1,12 @@
 from typing import Optional, Iterator, Dict, Any
 import logging
+import time
 from groq import Groq
 
+from app.infrastructure.logging import StructuredLogger
+
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class GroqAdapter:
     def __init__(
@@ -46,6 +50,14 @@ class GroqAdapter:
             "content": prompt
         })
         
+        structured_logger.log_llm_request(
+            provider="groq",
+            model=self.model,
+            prompt_length=len(prompt)
+        )
+
+        start_time = time.time()
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -54,18 +66,26 @@ class GroqAdapter:
                 top_p=self.top_p,
                 max_tokens=max_tokens or self.max_tokens,
             )
-            
+
             content = response.choices[0].message.content
-            
-            logger.debug(
-                f"Groq resposta gerada: {len(content)} chars, "
-                f"tokens={response.usage.total_tokens if response.usage else 'N/A'}"
+            duration_ms = (time.time() - start_time) * 1000
+            tokens = response.usage.total_tokens if response.usage else 0
+
+            structured_logger.log_llm_response(
+                provider="groq",
+                model=self.model,
+                tokens=tokens,
+                duration_ms=duration_ms
             )
-            
+
             return content
-            
+
         except Exception as e:
-            logger.error(f"Erro ao chamar Groq API: {e}")
+            structured_logger.log_llm_error(
+                provider="groq",
+                model=self.model,
+                error=str(e)
+            )
             raise
     
     def stream(
@@ -101,6 +121,15 @@ class GroqAdapter:
 
         effective_max_tokens = max_tokens or self.max_tokens
 
+        structured_logger.log_llm_request(
+            provider="groq",
+            model=self.model,
+            prompt_length=len(prompt)
+        )
+
+        start_time = time.time()
+        token_count = 0
+
         try:
             stream = self.client.chat.completions.create(
                 model=self.model,
@@ -113,10 +142,21 @@ class GroqAdapter:
 
             for chunk in stream:
                 if chunk.choices[0].delta.content:
+                    token_count += 1
                     yield chunk.choices[0].delta.content
 
-            logger.debug("Groq streaming concluído")
+            duration_ms = (time.time() - start_time) * 1000
+            structured_logger.log_llm_response(
+                provider="groq",
+                model=self.model,
+                tokens=token_count,
+                duration_ms=duration_ms
+            )
 
         except Exception as e:
-            logger.error(f"Erro no streaming Groq: {e}")
+            structured_logger.log_llm_error(
+                provider="groq",
+                model=self.model,
+                error=str(e)
+            )
             raise

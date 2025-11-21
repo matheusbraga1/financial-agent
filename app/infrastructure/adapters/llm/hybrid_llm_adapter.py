@@ -1,7 +1,10 @@
 from typing import Optional, Iterator
 import logging
 
+from app.infrastructure.logging import StructuredLogger
+
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 class HybridLLMAdapter:
     def __init__(
@@ -57,15 +60,21 @@ class HybridLLMAdapter:
                 return result
 
             except Exception as e:
-                logger.warning(
-                    f"Falha no provider primário ({primary.model_name}): {e}"
+                structured_logger.log_llm_fallback(
+                    from_provider=primary.model_name,
+                    to_provider=fallback.model_name if fallback else "none",
+                    reason=str(e)
                 )
 
         if fallback:
             is_available = getattr(fallback, 'is_available', True)
 
             if not is_available:
-                logger.error(f"Fallback {fallback.model_name} não está disponível")
+                structured_logger.log_llm_error(
+                    provider="hybrid",
+                    model=fallback.model_name,
+                    error="Fallback não disponível"
+                )
                 raise RuntimeError(
                     f"Nenhum provider LLM disponível. "
                     f"Primary: {getattr(primary, 'model_name', 'N/A')} falhou, "
@@ -130,15 +139,21 @@ class HybridLLMAdapter:
                 return
 
             except Exception as e:
-                logger.warning(
-                    f"Falha no streaming primário ({primary.model_name}): {e}"
+                structured_logger.log_llm_fallback(
+                    from_provider=primary.model_name,
+                    to_provider=fallback.model_name if fallback else "none",
+                    reason=str(e)
                 )
 
         if fallback:
             is_available = getattr(fallback, 'is_available', True)
 
             if not is_available:
-                logger.error(f"Fallback {fallback.model_name} não está disponível")
+                structured_logger.log_llm_error(
+                    provider="hybrid",
+                    model=fallback.model_name,
+                    error="Fallback não disponível para streaming"
+                )
                 raise RuntimeError(
                     f"Nenhum provider LLM disponível para streaming. "
                     f"Primary: {getattr(primary, 'model_name', 'N/A')} falhou, "

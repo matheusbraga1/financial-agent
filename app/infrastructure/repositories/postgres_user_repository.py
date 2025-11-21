@@ -5,7 +5,10 @@ from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 from contextlib import contextmanager
 
+from app.infrastructure.logging import StructuredLogger
+
 logger = logging.getLogger(__name__)
+structured_logger = StructuredLogger(__name__)
 
 
 class PostgresUserRepository:
@@ -129,7 +132,13 @@ class PostgresUserRepository:
                 )
 
                 user_id = cur.fetchone()["id"]
-                logger.info(f"User created: id={user_id}, username={username}")
+                structured_logger.log_db_success(
+                    operation="INSERT",
+                    table="users",
+                    affected=1,
+                    user_id=user_id,
+                    username=username
+                )
 
                 return user_id
 
@@ -251,8 +260,11 @@ class PostgresUserRepository:
                 updated = cur.rowcount > 0
 
                 if updated:
-                    logger.info(
-                        f"User updated: id={user_id}, fields={list(update_fields.keys())}"
+                    structured_logger.log_db_success(
+                        operation="UPDATE",
+                        table="users",
+                        affected=1,
+                        user_id=user_id
                     )
 
                 return updated
@@ -273,7 +285,12 @@ class PostgresUserRepository:
                 deleted = cur.rowcount > 0
 
                 if deleted:
-                    logger.info(f"User deleted: id={user_id}")
+                    structured_logger.log_db_success(
+                        operation="DELETE",
+                        table="users",
+                        affected=1,
+                        user_id=user_id
+                    )
 
                 return deleted
 
@@ -377,8 +394,11 @@ class PostgresUserRepository:
                 deleted_count = cur.rowcount
 
                 if deleted_count > 0:
-                    logger.info(
-                        f"Deleted {deleted_count} refresh token(s) for user_id={user_id}"
+                    structured_logger.log_db_success(
+                        operation="DELETE",
+                        table="refresh_tokens",
+                        affected=deleted_count,
+                        user_id=user_id
                     )
 
                 return deleted_count

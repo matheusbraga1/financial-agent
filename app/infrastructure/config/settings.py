@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     anchor_gating_threshold: float = 0.3
 
     log_level: str = "INFO"
-    log_format: str = "json"
+    log_format: str = "readable"
 
 
     redis_host: str = "localhost"
