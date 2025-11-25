@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import logging
+import torch
 from sentence_transformers import CrossEncoder
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,13 @@ class CrossEncoderReranker:
 
             try:
                 if "jina" in model_name.lower():
+                    # Força float32 para evitar erro "Got unsupported ScalarType BFloat16"
                     self._model_cache[model_name] = CrossEncoder(
                         model_name,
                         device=device,
                         max_length=512,
                         trust_remote_code=True,
+                        automodel_args={"dtype": torch.float32},
                     )
                 else:
                     self._model_cache[model_name] = CrossEncoder(

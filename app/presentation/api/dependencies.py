@@ -158,6 +158,8 @@ def get_llm_adapter():
             top_p=settings.llm_top_p,
             timeout=settings.ollama_timeout,
             max_tokens=settings.ollama_max_tokens,
+            num_thread=settings.ollama_num_thread,
+            num_ctx=settings.ollama_num_ctx,
         )
     
     else:
@@ -184,8 +186,10 @@ def get_llm_adapter():
             top_p=settings.llm_top_p,
             timeout=settings.ollama_timeout,
             max_tokens=settings.ollama_max_tokens,
+            num_thread=settings.ollama_num_thread,
+            num_ctx=settings.ollama_num_ctx,
         )
-        
+
         return HybridLLMAdapter(
             groq_adapter=groq_adapter,
             ollama_adapter=ollama_adapter,

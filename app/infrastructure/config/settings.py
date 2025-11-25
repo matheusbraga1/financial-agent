@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:3b"
     ollama_timeout: int = 120
     ollama_max_tokens: int = 2048
+    # Controle de recursos para evitar alto uso de CPU
+    # num_thread: número de threads (default conservador, aumente para produção)
+    # num_ctx: tamanho do contexto (1024-2048 para dev, 2048-4096 para produção)
+    ollama_num_thread: int = 2
+    ollama_num_ctx: int = 1024
 
     embedding_model: str = "intfloat/multilingual-e5-large"
     embedding_dimension: int = 1024

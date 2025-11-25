@@ -1,0 +1,112 @@
+# ============================================================================
+# Multi-stage Dockerfile for Production-Ready FastAPI Application
+# Optimized for: 20GB RAM / 10 vCPUs / AlmaLinux VM
+# ============================================================================
+
+# ============================================================================
+# STAGE 1: Builder - Install dependencies and compile packages
+# ============================================================================
+FROM python:3.11-slim as builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /build
+
+# Install system dependencies for building Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Create virtual environment and install Python dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip and install dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ============================================================================
+# STAGE 2: Production - Minimal runtime image
+# ============================================================================
+FROM python:3.11-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG APP_USER=appuser
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+# Metadata labels
+LABEL maintainer="matheus.braga@empresa.com"
+LABEL description="Financial Agent RAG-based AI Assistant"
+LABEL version="1.0.0"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PATH="/opt/venv/bin:$PATH" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBUG=False
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    tini \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set timezone to America/Sao_Paulo
+RUN ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime && \
+    echo "America/Sao_Paulo" > /etc/timezone
+
+# Create non-root user for security
+RUN groupadd -g ${APP_GID} ${APP_USER} && \
+    useradd -m -u ${APP_UID} -g ${APP_GID} -s /bin/bash ${APP_USER}
+
+# Set working directory
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy application code
+COPY --chown=${APP_USER}:${APP_USER} app ./app
+COPY --chown=${APP_USER}:${APP_USER} migrations ./migrations
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/logs /app/cache && \
+    chown -R ${APP_USER}:${APP_USER} /app
+
+# Switch to non-root user
+USER ${APP_USER}
+
+# Expose application port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health/live || exit 1
+
+# Use tini as init system for proper signal handling
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Default command: Run with Uvicorn
+# Optimized for 20GB RAM / 10 vCPUs
+# Workers: 6 (good for I/O bound workloads with 10 vCPUs)
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "6", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--log-level", "info", \
+     "--no-access-log", \
+     "--proxy-headers", \
+     "--forwarded-allow-ips", "*"]

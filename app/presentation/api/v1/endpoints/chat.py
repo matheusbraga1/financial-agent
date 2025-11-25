@@ -205,10 +205,26 @@ async def chat_stream(
 
                 if cached_response:
                     structured_logger.log_cache_hit(key=cache_key)
-                    yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
+                    # Gera session_id mesmo para cache (para usuários anônimos)
+                    user_id = None
+                    session_id = manage_conversation_uc.ensure_session(
+                        session_id=request.session_id,
+                        user_id=user_id,
+                    )
+                    start_msg = {'type': 'start', 'data': {'session_id': session_id}}
+                    yield f"data: {json.dumps(start_msg, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'token', 'data': cached_response['answer']}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'sources', 'data': cached_response['sources']}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'type': 'metadata', 'data': {'confidence': cached_response['confidence'], 'model_used': cached_response['model_used'], 'from_cache': True}}, ensure_ascii=False)}\n\n"
+                    metadata_msg = {
+                        'type': 'metadata',
+                        'data': {
+                            'session_id': session_id,
+                            'confidence': cached_response['confidence'],
+                            'model_used': cached_response['model_used'],
+                            'from_cache': True
+                        }
+                    }
+                    yield f"data: {json.dumps(metadata_msg, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
                     return
 
@@ -231,7 +247,8 @@ async def chat_stream(
                 limit=200,
             )
 
-            yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
+            start_msg = {'type': 'start', 'data': {'session_id': session_id}}
+            yield f"data: {json.dumps(start_msg, ensure_ascii=False)}\n\n"
 
             full_answer = ""
             sources = []
@@ -265,7 +282,33 @@ async def chat_stream(
                     settings = get_settings()
                     model_used = settings.groq_model if settings.llm_provider == "groq" else settings.ollama_model
 
+                    # Persiste mensagem ANTES de enviar metadata (para incluir message_id)
+                    message_id = None
+                    if current_user and full_answer:
+                        try:
+                            message_id = manage_conversation_uc.add_assistant_message(
+                                session_id=session_id,
+                                answer=full_answer,
+                                sources=sources,
+                                model_used=model_used,
+                                confidence=confidence,
+                            )
+                            structured_logger.log_message_persisted(
+                                session_id=session_id,
+                                role="assistant",
+                                message_id=message_id
+                            )
+                        except Exception as e:
+                            structured_logger.error(
+                                "ERRO ao persistir mensagem do assistente",
+                                session_id=session_id,
+                                error=str(e),
+                                exc_info=True
+                            )
+
                     metadata = {
+                        "session_id": session_id,
+                        "message_id": message_id,
                         "confidence": confidence,
                         "model_used": model_used,
                         "from_cache": False
@@ -286,38 +329,7 @@ async def chat_stream(
                     # Não envia mais nada ao cliente (já desconectou)
                     return
 
-            if current_user and full_answer:
-                try:
-                    message_id = manage_conversation_uc.add_assistant_message(
-                        session_id=session_id,
-                        answer=full_answer,
-                        sources=sources,
-                        model_used=model_used,
-                        confidence=confidence,
-                    )
-                    structured_logger.log_message_persisted(
-                        session_id=session_id,
-                        role="assistant",
-                        message_id=message_id
-                    )
-                except Exception as e:
-                    structured_logger.error(
-                        "ERRO ao persistir mensagem do assistente",
-                        session_id=session_id,
-                        error=str(e),
-                        exc_info=True
-                    )
-            elif current_user and not full_answer:
-                structured_logger.warning(
-                    "Mensagem do assistente NAO persistida - full_answer vazio",
-                    session_id=session_id,
-                    user_id=current_user.get("id")
-                )
-            elif not current_user:
-                structured_logger.debug(
-                    "Mensagem do assistente NAO persistida - usuario anonimo",
-                    session_id=session_id
-                )
+            # Persistência da mensagem já foi feita no handler "_done" acima
 
             if not current_user and cache_key and full_answer:
                 try:

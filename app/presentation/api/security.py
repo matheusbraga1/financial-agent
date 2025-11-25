@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 import jwt
@@ -163,7 +163,8 @@ def revoke_token(token: str) -> bool:
             logger.warning("Token sem jti ou exp - não pode ser revogado")
             return False
 
-        exp_datetime = datetime.fromtimestamp(exp)
+        # Converte timestamp para datetime aware (com timezone UTC)
+        exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
 
         jwt_handler = get_jwt_handler()
         return jwt_handler.revoke_token(jti, exp_datetime)

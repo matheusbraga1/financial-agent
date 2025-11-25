@@ -1,0 +1,313 @@
+version: '3.8'
+
+# ============================================================================
+# Docker Compose - PRODUÇÃO
+# Otimizado para: 20GB RAM / 10 vCPUs / AlmaLinux 8.10
+# Acesso: http://192.168.1.150
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # PostgreSQL 16 - Database Principal
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: financial-agent-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-financial_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-financial_agent_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/postgresql_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+    # Configurações otimizadas para 20GB RAM
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=30"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "log_min_duration_statement=1000"
+      - "-c"
+      - "log_line_prefix=%t [%p]: [%l-1] "
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-financial_agent_user} -d ${POSTGRES_DATABASE:-financial_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - financial-agent-network
+
+  # ==========================================================================
+  # Qdrant - Vector Database
+  # ==========================================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: financial-agent-qdrant
+    restart: unless-stopped
+
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+    environment:
+      QDRANT_ALLOW_RECOVERY: "true"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - financial-agent-network
+
+  # ==========================================================================
+  # Redis - Cache & Session Store
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: financial-agent-redis
+    restart: unless-stopped
+
+    volumes:
+      - redis_data:/data
+
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-}
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          memory: 256M
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - financial-agent-network
+
+  # ==========================================================================
+  # Ollama - Local LLM (Fallback)
+  # ==========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: financial-agent-ollama
+    restart: unless-stopped
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    environment:
+      # Otimizado para 10 vCPUs / 20GB RAM
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-3}
+      OLLAMA_MAX_LOADED_MODELS: 1
+      OLLAMA_KEEP_ALIVE: 10m
+      OLLAMA_HOST: 0.0.0.0:11434
+
+    deploy:
+      resources:
+        limits:
+          cpus: '6'
+          memory: 10G
+        reservations:
+          cpus: '4'
+          memory: 6G
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - financial-agent-network
+
+  # ==========================================================================
+  # Backend - FastAPI Application
+  # ==========================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: financial-agent-backend:latest
+    container_name: financial-agent-backend
+    restart: unless-stopped
+
+    env_file:
+      - .env.production
+
+    environment:
+      # Override .env with Docker network hostnames
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      OLLAMA_HOST: http://ollama:11434
+
+      # Production settings
+      DEBUG: "False"
+      LOG_LEVEL: INFO
+
+    volumes:
+      # Apenas para logs e cache (não montar código em produção!)
+      - backend_logs:/app/logs
+      - backend_cache:/app/cache
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+    networks:
+      - financial-agent-network
+
+  # ==========================================================================
+  # Nginx - Reverse Proxy
+  # ==========================================================================
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.nginx
+
+    image: financial-agent-nginx:latest
+    container_name: financial-agent-nginx
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          memory: 128M
+
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    networks:
+      - financial-agent-network
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  financial-agent-network:
+    driver: bridge
+    name: financial-agent-network
+
+# ============================================================================
+# Volumes (Named volumes para melhor gerenciamento)
+# ============================================================================
+volumes:
+  postgres_data:
+    name: financial-agent-postgres-data
+  qdrant_data:
+    name: financial-agent-qdrant-data
+  redis_data:
+    name: financial-agent-redis-data
+  ollama_data:
+    name: financial-agent-ollama-data
+  backend_logs:
+    name: financial-agent-backend-logs
+  backend_cache:
+    name: financial-agent-backend-cache
+  nginx_logs:
+    name: financial-agent-nginx-logs

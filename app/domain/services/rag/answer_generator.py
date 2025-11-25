@@ -4,25 +4,52 @@ import re
 from app.utils.snippet_builder import SnippetBuilder
 
 class AnswerGenerator:
-    def build_context(self, documents: List[Dict[str, Any]]) -> str:
+    # Limite de caracteres por documento e total do contexto
+    MAX_CONTENT_PER_DOC = 1500  # ~375 tokens por documento
+    MAX_TOTAL_CONTEXT = 12000   # ~3000 tokens total de contexto
+
+    def build_context(
+        self,
+        documents: List[Dict[str, Any]],
+        max_per_doc: int = None,
+        max_total: int = None,
+    ) -> str:
         if not documents:
             return ""
-        
+
+        max_per_doc = max_per_doc or self.MAX_CONTENT_PER_DOC
+        max_total = max_total or self.MAX_TOTAL_CONTEXT
+
         context_parts: List[str] = []
-        
+        total_chars = 0
+
         for i, doc in enumerate(documents, 1):
             title = doc.get("title", "Documento sem título")
             content = doc.get("content", "")
             score = doc.get("score", 0.0)
             category = doc.get("category", "")
-            
+
+            # Trunca o conteúdo se for muito grande
+            if len(content) > max_per_doc:
+                content = content[:max_per_doc] + "..."
+
             header = f"[Documento {i}] {title}"
             if category:
                 header += f" ({category})"
             header += f" - Relevância: {score:.1%}"
-            
-            context_parts.append(f"{header}\n{content}\n")
-        
+
+            doc_text = f"{header}\n{content}\n"
+
+            # Verifica se ainda cabe no limite total
+            if total_chars + len(doc_text) > max_total:
+                # Adiciona nota de truncamento
+                if context_parts:
+                    context_parts.append(f"[... {len(documents) - i + 1} documentos adicionais omitidos por limite de contexto]")
+                break
+
+            context_parts.append(doc_text)
+            total_chars += len(doc_text)
+
         return "\n".join(context_parts)
     
     def build_prompt(

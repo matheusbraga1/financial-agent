@@ -18,6 +18,24 @@ services:
       - "11434:11434"
     volumes:
       - ./ollama:/root/.ollama
+    environment:
+      # Permite processar múltiplas requisições em paralelo (ajuste conforme RAM do servidor)
+      # Cada requisição paralela consome ~2-4GB de RAM adicional
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-2}
+      # Número máximo de modelos carregados na memória
+      - OLLAMA_MAX_LOADED_MODELS=1
+      # Timeout para manter modelo na memória (5 minutos)
+      - OLLAMA_KEEP_ALIVE=5m
+    deploy:
+      resources:
+        limits:
+          # Ajuste conforme CPUs disponíveis no servidor (recomendado: 50-75% do total)
+          cpus: '${OLLAMA_CPU_LIMIT:-6}'
+          # Ajuste conforme RAM disponível (modelo 3B precisa ~4GB + 2GB por requisição paralela)
+          memory: ${OLLAMA_MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '2'
+          memory: 4G
     restart: unless-stopped
 
   mysql-glpi:

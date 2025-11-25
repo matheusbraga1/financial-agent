@@ -21,6 +21,8 @@ class OllamaAdapter:
         top_p: float = 0.9,
         timeout: int = 120,
         max_tokens: int = 2048,
+        num_thread: int = 4,
+        num_ctx: int = 2048,
     ):
         self.host = host.rstrip("/")
         self.model = model
@@ -28,6 +30,8 @@ class OllamaAdapter:
         self.top_p = top_p
         self.timeout = timeout
         self.max_tokens = max_tokens
+        self.num_thread = num_thread
+        self.num_ctx = num_ctx
         self.model_name = f"ollama/{model}"
         self.is_available = False
 
@@ -35,7 +39,8 @@ class OllamaAdapter:
 
         logger.info(
             f"OllamaAdapter inicializado: host={host}, modelo={model}, "
-            f"max_tokens={max_tokens}, disponível={'✓' if self.is_available else '✗'}"
+            f"max_tokens={max_tokens}, num_thread={num_thread}, num_ctx={num_ctx}, "
+            f"disponível={'✓' if self.is_available else '✗'}"
         )
 
     def _check_availability(self) -> None:
@@ -86,6 +91,8 @@ class OllamaAdapter:
             "options": {
                 "temperature": temperature or self.temperature,
                 "top_p": self.top_p,
+                "num_thread": self.num_thread,
+                "num_ctx": self.num_ctx,
             }
         }
 
@@ -173,6 +180,8 @@ class OllamaAdapter:
                 "temperature": temperature or self.temperature,
                 "top_p": self.top_p,
                 "num_predict": effective_max_tokens,
+                "num_thread": self.num_thread,
+                "num_ctx": self.num_ctx,
             }
         }
 

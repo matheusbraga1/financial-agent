@@ -212,8 +212,9 @@ class PostgresConversationRepository:
                 messages = []
                 for row in rows:
                     message = dict(row)
+                    # Mapeia sources_json para sources (esperado pelo modelo Pydantic)
                     if message.get("sources_json"):
-                        message["sources_json"] = message["sources_json"]
+                        message["sources"] = message.pop("sources_json")
                     messages.append(message)
 
                 return messages
@@ -235,8 +236,9 @@ class PostgresConversationRepository:
                     return None
 
                 message = dict(row)
+                # Mapeia sources_json para sources (esperado pelo modelo Pydantic)
                 if message.get("sources_json"):
-                    message["sources_json"] = message["sources_json"]
+                    message["sources"] = message.pop("sources_json")
 
                 return message
 
