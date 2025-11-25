@@ -73,7 +73,7 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "6", \
+     "--workers", "4", \
      "--log-level", "info", \
      "--no-access-log", \
      "--proxy-headers", \

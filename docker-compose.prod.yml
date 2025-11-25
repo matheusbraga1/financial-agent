@@ -44,6 +44,8 @@ services:
       - "log_min_duration_statement=1000"
       - "-c"
       - "log_line_prefix=%t [%p]: [%l-1] "
+      - "-c"
+      - "max_connections=100"
 
     deploy:
       resources:
