@@ -22,6 +22,7 @@ scikit-learn==1.4.0
 pymysql==1.1.1
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
+psycopg[pool]==3.1.18
 
 beautifulsoup4==4.12.3
 
