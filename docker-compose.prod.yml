@@ -1,15 +1,6 @@
 version: '3.8'
 
-# ============================================================================
-# Docker Compose - PRODUÇÃO
-# Otimizado para: 20GB RAM / 10 vCPUs / AlmaLinux 8.10
-# Acesso: http://192.168.1.150
-# ============================================================================
-
 services:
-  # ==========================================================================
-  # PostgreSQL 16 - Database Principal
-  # ==========================================================================
   postgres:
     image: postgres:16-alpine
     container_name: financial-agent-postgres
@@ -25,7 +16,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/postgresql_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
 
-    # Configurações otimizadas para 20GB RAM
     command:
       - "postgres"
       - "-c"
@@ -74,9 +64,6 @@ services:
     networks:
       - financial-agent-network
 
-  # ==========================================================================
-  # Qdrant - Vector Database
-  # ==========================================================================
   qdrant:
     image: qdrant/qdrant:latest
     container_name: financial-agent-qdrant
@@ -98,18 +85,15 @@ services:
           memory: 1G
 
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
 
     networks:
       - financial-agent-network
 
-  # ==========================================================================
-  # Redis - Cache & Session Store
-  # ==========================================================================
   redis:
     image: redis:7-alpine
     container_name: financial-agent-redis
@@ -144,9 +128,6 @@ services:
     networks:
       - financial-agent-network
 
-  # ==========================================================================
-  # Ollama - Local LLM (Fallback)
-  # ==========================================================================
   ollama:
     image: ollama/ollama:latest
     container_name: financial-agent-ollama
@@ -156,7 +137,6 @@ services:
       - ollama_data:/root/.ollama
 
     environment:
-      # Otimizado para 10 vCPUs / 20GB RAM
       OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-3}
       OLLAMA_MAX_LOADED_MODELS: 1
       OLLAMA_KEEP_ALIVE: 10m
@@ -172,18 +152,15 @@ services:
           memory: 6G
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/11434' || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
     networks:
       - financial-agent-network
 
-  # ==========================================================================
-  # Backend - FastAPI Application
-  # ==========================================================================
   backend:
     build:
       context: .
@@ -197,7 +174,6 @@ services:
       - .env.production
 
     environment:
-      # Override .env with Docker network hostnames
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       REDIS_HOST: redis
@@ -211,7 +187,6 @@ services:
       LOG_LEVEL: INFO
 
     volumes:
-      # Apenas para logs e cache (não montar código em produção!)
       - backend_logs:/app/logs
       - backend_cache:/app/cache
 
@@ -244,9 +219,6 @@ services:
     networks:
       - financial-agent-network
 
-  # ==========================================================================
-  # Nginx - Reverse Proxy
-  # ==========================================================================
   nginx:
     build:
       context: ./nginx
@@ -285,17 +257,11 @@ services:
     networks:
       - financial-agent-network
 
-# ============================================================================
-# Networks
-# ============================================================================
 networks:
   financial-agent-network:
     driver: bridge
     name: financial-agent-network
 
-# ============================================================================
-# Volumes (Named volumes para melhor gerenciamento)
-# ============================================================================
 volumes:
   postgres_data:
     name: financial-agent-postgres-data
