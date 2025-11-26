@@ -28,7 +28,13 @@ cd "$PROJECT_DIR"
 echo ""
 echo "🔨 Step 1/7: Building new Docker images..."
 
-SHORT_SHA=$(git rev-parse --short HEAD)
+# Use GIT_SHA from environment if available (GitHub Actions), otherwise use git
+if [ -n "$GIT_SHA" ]; then
+    SHORT_SHA="${GIT_SHA:0:7}"
+else
+    SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+fi
+
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 NEW_TAG="prod-${SHORT_SHA}-${TIMESTAMP}"
 

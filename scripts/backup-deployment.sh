@@ -43,8 +43,8 @@ echo "✅ Saved image information"
 cat > "${BACKUP_PATH}/metadata.json" <<EOF
 {
   "backup_time": "${TIMESTAMP}",
-  "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')",
-  "git_branch": "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')",
+  "git_commit": "${GIT_SHA:-$(git rev-parse HEAD 2>/dev/null || echo 'unknown')}",
+  "git_branch": "${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')}",
   "docker_compose_version": "$(docker compose version --short)",
   "hostname": "$(hostname)"
 }
