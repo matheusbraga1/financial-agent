@@ -89,9 +89,11 @@ MAX_WAIT=120
 WAIT_COUNT=0
 
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    # Check if backend is responding
-    if curl -sf http://localhost/api/v1/health/ready > /dev/null 2>&1; then
-        echo "✅ Services are healthy"
+    # Check Docker healthcheck status of backend containers
+    HEALTHY_COUNT=$(docker ps --filter "name=financial-agent-backend" --filter "health=healthy" --format "{{.Names}}" | wc -l)
+
+    if [ "$HEALTHY_COUNT" -ge 1 ]; then
+        echo "✅ Services are healthy ($HEALTHY_COUNT backends)"
         break
     fi
 
@@ -111,8 +113,16 @@ fi
 echo ""
 echo "🏥 Step 4/7: Running health checks..."
 
-# Test critical endpoints
-HEALTH_RESPONSE=$(curl -s http://localhost/api/v1/health/ready)
+# Get a healthy backend container name
+BACKEND_CONTAINER=$(docker ps --filter "name=financial-agent-backend" --filter "health=healthy" --format "{{.Names}}" | head -n 1)
+
+if [ -z "$BACKEND_CONTAINER" ]; then
+    echo -e "${RED}❌ No healthy backend container found${NC}"
+    exit 1
+fi
+
+# Test critical endpoint from inside the container
+HEALTH_RESPONSE=$(docker exec "$BACKEND_CONTAINER" curl -s http://localhost:8000/api/v1/health/ready)
 if echo "$HEALTH_RESPONSE" | grep -q '"status":"ready"'; then
     echo "✅ Health check passed"
 else
