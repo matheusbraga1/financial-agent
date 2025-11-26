@@ -194,10 +194,13 @@ WAIT_COUNT_FINAL=0
 
 while [ $WAIT_COUNT_FINAL -lt $MAX_WAIT_FINAL ]; do
     # Check if backend is healthy
-    HEALTHY=$(docker ps --filter "name=financial-agent-backend" --filter "health=healthy" --format "{{.Names}}" | wc -l)
+    BACKEND_HEALTHY=$(docker ps --filter "name=financial-agent-backend" --filter "health=healthy" --format "{{.Names}}" | wc -l)
 
-    if [ "$HEALTHY" -ge 1 ]; then
-        # Backend is healthy, now test via nginx
+    # Check if nginx is healthy
+    NGINX_HEALTHY=$(docker ps --filter "name=financial-agent-nginx" --filter "health=healthy" --format "{{.Names}}" | wc -l)
+
+    if [ "$BACKEND_HEALTHY" -ge 1 ] && [ "$NGINX_HEALTHY" -ge 1 ]; then
+        # Both backend and nginx are healthy, now test via nginx
         FINAL_CHECK=$(curl -s http://localhost/api/v1/health/ready)
         if echo "$FINAL_CHECK" | grep -q '"status":"ready"'; then
             echo -e "${GREEN}✅ Deployment successful!${NC}"
@@ -205,7 +208,7 @@ while [ $WAIT_COUNT_FINAL -lt $MAX_WAIT_FINAL ]; do
             echo "============================================================================"
             echo "Deployment Summary"
             echo "============================================================================"
-            echo "Git Commit: $(git rev-parse HEAD)"
+            echo "Git Commit: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
             echo "Image Tag: $NEW_TAG"
             echo "Deployment Time: $(date)"
             echo "============================================================================"
@@ -214,7 +217,7 @@ while [ $WAIT_COUNT_FINAL -lt $MAX_WAIT_FINAL ]; do
     fi
 
     WAIT_COUNT_FINAL=$((WAIT_COUNT_FINAL + 5))
-    echo "   Waiting for final verification... (${WAIT_COUNT_FINAL}s / ${MAX_WAIT_FINAL}s)"
+    echo "   Waiting for final verification... (${WAIT_COUNT_FINAL}s / ${MAX_WAIT_FINAL}s) [Backend: $BACKEND_HEALTHY, Nginx: $NGINX_HEALTHY]"
     sleep 5
 done
 
