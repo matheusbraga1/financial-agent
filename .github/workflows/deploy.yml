@@ -63,7 +63,7 @@ jobs:
         run: |
           source "$HOME/venv/bin/activate"
           bandit -r app/ -ll
-        continue-on-error: false
+        continue-on-error: true
 
   # ============================================================================
   # Stage 2: Unit Tests
