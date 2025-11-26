@@ -125,7 +125,7 @@ jobs:
         run: |
           docker build -t financial-agent-nginx:${{ steps.meta.outputs.tags }} \
             -t financial-agent-nginx:latest \
-            -f nginx/Dockerfile nginx/
+            -f nginx/Dockerfile.nginx nginx/
 
       - name: Verify images
         run: |
