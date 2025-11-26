@@ -137,7 +137,8 @@ echo ""
 echo "🔄 Step 5/7: Switching traffic to GREEN environment..."
 
 # Recreate nginx to load balance across both backends
-docker compose -f $COMPOSE_FILE up -d --force-recreate nginx
+# IMPORTANT: Keep --scale backend=2 to prevent premature scale down
+docker compose -f $COMPOSE_FILE up -d --force-recreate --scale backend=2 nginx
 
 echo "✅ Traffic switched to GREEN"
 
@@ -149,8 +150,17 @@ echo "🔽 Step 6/7: Scaling down to 1 backend..."
 
 sleep 5  # Brief pause to ensure traffic has switched
 
-# Scale backend down to 1 (only GREEN remains)
-docker compose -f $COMPOSE_FILE up -d --no-deps --scale backend=1 backend
+# Get list of backend containers and remove one
+BACKEND_CONTAINERS=$(docker ps --filter "name=financial-agent-backend" --format "{{.Names}}" | sort)
+CONTAINER_COUNT=$(echo "$BACKEND_CONTAINERS" | wc -l)
+
+if [ "$CONTAINER_COUNT" -gt 1 ]; then
+    # Remove the last container in the list (keeps naming consistent)
+    CONTAINER_TO_REMOVE=$(echo "$BACKEND_CONTAINERS" | tail -n 1)
+    echo "   Removing: $CONTAINER_TO_REMOVE"
+    docker stop "$CONTAINER_TO_REMOVE" > /dev/null 2>&1
+    docker rm "$CONTAINER_TO_REMOVE" > /dev/null 2>&1
+fi
 
 echo "✅ BLUE environment removed (1 backend running)"
 
@@ -178,8 +188,8 @@ echo "✅ Cleanup completed"
 echo ""
 echo "🔍 Final verification..."
 
-# Wait for backend to be healthy after scale down
-MAX_WAIT_FINAL=60
+# Wait for backend to be healthy and accessible via nginx
+MAX_WAIT_FINAL=90
 WAIT_COUNT_FINAL=0
 
 while [ $WAIT_COUNT_FINAL -lt $MAX_WAIT_FINAL ]; do
