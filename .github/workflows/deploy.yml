@@ -156,6 +156,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
           GIT_SHA: ${{ github.sha }}
+          CI: true
         run: |
           echo "🚀 Starting Blue-Green deployment..."
           bash scripts/deploy-blue-green.sh

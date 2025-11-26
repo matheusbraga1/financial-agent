@@ -6,7 +6,13 @@
 
 set -e
 
-PROJECT_DIR="/opt/financial-agent/financial-agent"
+# When running in CI, use current directory (GitHub Actions checkout)
+# When running manually, use production directory
+if [ -z "$CI" ]; then
+    PROJECT_DIR="/opt/financial-agent/financial-agent"
+    cd "$PROJECT_DIR"
+fi
+
 COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env.production"
 
@@ -19,8 +25,7 @@ NC='\033[0m' # No Color
 echo "============================================================================"
 echo "Blue-Green Deployment - Financial Agent"
 echo "============================================================================"
-
-cd "$PROJECT_DIR"
+echo "Working directory: $(pwd)"
 
 # ============================================================================
 # Step 1: Build new images (with new tags)
