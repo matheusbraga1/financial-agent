@@ -74,7 +74,8 @@ echo ""
 echo "🚀 Step 2/7: Starting GREEN environment..."
 
 # Scale backend to 2 instances (BLUE + GREEN running simultaneously)
-docker compose -f $COMPOSE_FILE up -d --no-deps --scale backend=2 backend
+# Note: First scale starts dependencies (postgres, redis, qdrant, etc)
+docker compose -f $COMPOSE_FILE up -d --scale backend=2 backend
 
 echo "✅ GREEN environment started (2 backends running)"
 
