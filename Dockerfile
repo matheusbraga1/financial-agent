@@ -57,6 +57,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 COPY --chown=${APP_USER}:${APP_USER} app ./app
 COPY --chown=${APP_USER}:${APP_USER} migrations ./migrations
+COPY --chown=${APP_USER}:${APP_USER} scripts ./scripts
 
 RUN mkdir -p /app/logs /app/cache && \
     chown -R ${APP_USER}:${APP_USER} /app
