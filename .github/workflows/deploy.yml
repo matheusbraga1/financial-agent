@@ -22,36 +22,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install flake8 black isort mypy bandit
-          pip install -r requirements.txt
+          python3.11 -m pip install --upgrade pip
+          python3.11 -m pip install flake8 black isort mypy bandit
+          python3.11 -m pip install -r requirements.txt
 
       - name: Run Black (formatting check)
-        run: black --check app/ --line-length 100
+        run: python3.11 -m black --check app/ --line-length 100
         continue-on-error: true
 
       - name: Run isort (import sorting)
-        run: isort --check-only app/
+        run: python3.11 -m isort --check-only app/
         continue-on-error: true
 
       - name: Run Flake8 (linting)
-        run: flake8 app/ --max-line-length=100 --ignore=E203,W503
+        run: python3.11 -m flake8 app/ --max-line-length=100 --ignore=E203,W503
         continue-on-error: true
 
       - name: Run MyPy (type checking)
-        run: mypy app/ --ignore-missing-imports
+        run: python3.11 -m mypy app/ --ignore-missing-imports
         continue-on-error: true
 
       - name: Run Bandit (security check)
-        run: bandit -r app/ -ll
+        run: python3.11 -m bandit -r app/ -ll
         continue-on-error: false
 
   # ============================================================================
@@ -66,21 +60,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+          python3.11 -m pip install --upgrade pip
+          python3.11 -m pip install -r requirements.txt
+          python3.11 -m pip install pytest pytest-cov pytest-asyncio
 
       - name: Run pytest
         run: |
-          pytest --cov=app --cov-report=term-missing --cov-report=html
+          python3.11 -m pytest --cov=app --cov-report=term-missing --cov-report=html
         continue-on-error: true
 
       - name: Upload coverage report
