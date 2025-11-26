@@ -178,21 +178,35 @@ echo "✅ Cleanup completed"
 echo ""
 echo "🔍 Final verification..."
 
-# Wait for service to stabilize after scale down
-sleep 10
+# Wait for backend to be healthy after scale down
+MAX_WAIT_FINAL=60
+WAIT_COUNT_FINAL=0
 
-FINAL_CHECK=$(curl -s http://localhost/api/v1/health/ready)
-if echo "$FINAL_CHECK" | grep -q '"status":"ready"'; then
-    echo -e "${GREEN}✅ Deployment successful!${NC}"
-    echo ""
-    echo "============================================================================"
-    echo "Deployment Summary"
-    echo "============================================================================"
-    echo "Git Commit: $(git rev-parse HEAD)"
-    echo "Image Tag: $NEW_TAG"
-    echo "Deployment Time: $(date)"
-    echo "============================================================================"
-else
-    echo -e "${RED}❌ Final verification failed${NC}"
-    exit 1
-fi
+while [ $WAIT_COUNT_FINAL -lt $MAX_WAIT_FINAL ]; do
+    # Check if backend is healthy
+    HEALTHY=$(docker ps --filter "name=financial-agent-backend" --filter "health=healthy" --format "{{.Names}}" | wc -l)
+
+    if [ "$HEALTHY" -ge 1 ]; then
+        # Backend is healthy, now test via nginx
+        FINAL_CHECK=$(curl -s http://localhost/api/v1/health/ready)
+        if echo "$FINAL_CHECK" | grep -q '"status":"ready"'; then
+            echo -e "${GREEN}✅ Deployment successful!${NC}"
+            echo ""
+            echo "============================================================================"
+            echo "Deployment Summary"
+            echo "============================================================================"
+            echo "Git Commit: $(git rev-parse HEAD)"
+            echo "Image Tag: $NEW_TAG"
+            echo "Deployment Time: $(date)"
+            echo "============================================================================"
+            exit 0
+        fi
+    fi
+
+    WAIT_COUNT_FINAL=$((WAIT_COUNT_FINAL + 5))
+    echo "   Waiting for final verification... (${WAIT_COUNT_FINAL}s / ${MAX_WAIT_FINAL}s)"
+    sleep 5
+done
+
+echo -e "${RED}❌ Final verification failed${NC}"
+exit 1
