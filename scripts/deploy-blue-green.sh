@@ -11,10 +11,16 @@ set -e
 if [ -z "$CI" ]; then
     PROJECT_DIR="/opt/financial-agent/financial-agent"
     cd "$PROJECT_DIR"
-    ENV_FILE=".env.production"
 else
-    # In CI, use absolute path to production .env file
-    ENV_FILE="/opt/financial-agent/financial-agent/.env.production"
+    # In CI, create symlink to production .env file
+    PROD_ENV="/opt/financial-agent/financial-agent/.env.production"
+    if [ -f "$PROD_ENV" ]; then
+        ln -sf "$PROD_ENV" .env.production
+        echo "✅ Linked .env.production from production directory"
+    else
+        echo "❌ Production .env.production not found at $PROD_ENV"
+        exit 1
+    fi
 fi
 
 COMPOSE_FILE="docker-compose.prod.yml"
@@ -67,7 +73,7 @@ echo ""
 echo "🚀 Step 2/7: Starting GREEN environment..."
 
 # Scale backend to 2 instances (BLUE + GREEN running simultaneously)
-docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale backend=2 backend
+docker compose -f $COMPOSE_FILE up -d --no-deps --scale backend=2 backend
 
 echo "✅ GREEN environment started (2 backends running)"
 
@@ -119,7 +125,7 @@ echo ""
 echo "🔄 Step 5/7: Switching traffic to GREEN environment..."
 
 # Recreate nginx to load balance across both backends
-docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --force-recreate nginx
+docker compose -f $COMPOSE_FILE up -d --force-recreate nginx
 
 echo "✅ Traffic switched to GREEN"
 
@@ -132,7 +138,7 @@ echo "🔽 Step 6/7: Scaling down to 1 backend..."
 sleep 5  # Brief pause to ensure traffic has switched
 
 # Scale backend down to 1 (only GREEN remains)
-docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale backend=1 backend
+docker compose -f $COMPOSE_FILE up -d --no-deps --scale backend=1 backend
 
 echo "✅ BLUE environment removed (1 backend running)"
 
