@@ -130,6 +130,45 @@ services:
     networks:
       - financial-agent-network
 
+  mysql-glpi:
+    image: mysql:8.0
+    container_name: financial-agent-mysql-glpi
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${GLPI_DB_PASSWORD:-glpi123}
+      MYSQL_DATABASE: ${GLPI_DB_NAME:-glpi}
+      MYSQL_USER: ${GLPI_DB_USER:-glpi}
+      MYSQL_PASSWORD: ${GLPI_DB_PASSWORD:-glpi123}
+
+    volumes:
+      - mysql_glpi_data:/var/lib/mysql
+      - ./backup/glpi_db.sql:/docker-entrypoint-initdb.d/glpi_db.sql:ro
+
+    command:
+      - "mysqld"
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+      - "--max_allowed_packet=64M"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${GLPI_DB_PASSWORD:-glpi123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - financial-agent-network
+
   ollama:
     image: ollama/ollama:latest
     container_name: financial-agent-ollama
@@ -271,6 +310,8 @@ volumes:
     name: financial-agent-qdrant-data
   redis_data:
     name: financial-agent-redis-data
+  mysql_glpi_data:
+    name: financial-agent-mysql-glpi-data
   ollama_data:
     name: financial-agent-ollama-data
   backend_logs:
