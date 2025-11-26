@@ -22,30 +22,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Setup Python environment
         run: |
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install flake8 black isort mypy bandit
-          python3.11 -m pip install -r requirements.txt
+          if [ ! -d "/opt/financial-agent/venv" ]; then
+            python3.11 -m venv /opt/financial-agent/venv
+            source /opt/financial-agent/venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install flake8 black isort mypy bandit pytest pytest-cov pytest-asyncio
+          fi
+          source /opt/financial-agent/venv/bin/activate
+          pip install --upgrade --upgrade-strategy only-if-needed -r requirements.txt
 
       - name: Run Black (formatting check)
-        run: python3.11 -m black --check app/ --line-length 100
+        run: |
+          source /opt/financial-agent/venv/bin/activate
+          black --check app/ --line-length 100
         continue-on-error: true
 
       - name: Run isort (import sorting)
-        run: python3.11 -m isort --check-only app/
+        run: |
+          source /opt/financial-agent/venv/bin/activate
+          isort --check-only app/
         continue-on-error: true
 
       - name: Run Flake8 (linting)
-        run: python3.11 -m flake8 app/ --max-line-length=100 --ignore=E203,W503
+        run: |
+          source /opt/financial-agent/venv/bin/activate
+          flake8 app/ --max-line-length=100 --ignore=E203,W503
         continue-on-error: true
 
       - name: Run MyPy (type checking)
-        run: python3.11 -m mypy app/ --ignore-missing-imports
+        run: |
+          source /opt/financial-agent/venv/bin/activate
+          mypy app/ --ignore-missing-imports
         continue-on-error: true
 
       - name: Run Bandit (security check)
-        run: python3.11 -m bandit -r app/ -ll
+        run: |
+          source /opt/financial-agent/venv/bin/activate
+          bandit -r app/ -ll
         continue-on-error: false
 
   # ============================================================================
@@ -60,15 +76,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          python3.11 -m pip install --upgrade pip
-          python3.11 -m pip install -r requirements.txt
-          python3.11 -m pip install pytest pytest-cov pytest-asyncio
-
       - name: Run pytest
         run: |
-          python3.11 -m pytest --cov=app --cov-report=term-missing --cov-report=html
+          source /opt/financial-agent/venv/bin/activate
+          pytest --cov=app --cov-report=term-missing --cov-report=html
         continue-on-error: true
 
       - name: Upload coverage report
