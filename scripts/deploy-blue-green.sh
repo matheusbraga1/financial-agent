@@ -23,17 +23,10 @@ echo "==========================================================================
 cd "$PROJECT_DIR"
 
 # ============================================================================
-# Step 1: Pull latest code
+# Step 1: Build new images (with new tags)
 # ============================================================================
 echo ""
-echo "📥 Step 1/8: Pulling latest code from GitHub..."
-git pull origin main
-
-# ============================================================================
-# Step 2: Build new images (with new tags)
-# ============================================================================
-echo ""
-echo "🔨 Step 2/8: Building new Docker images..."
+echo "🔨 Step 1/7: Building new Docker images..."
 
 SHORT_SHA=$(git rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -54,10 +47,10 @@ docker build -t financial-agent-nginx:${NEW_TAG} \
 echo "✅ Images built successfully"
 
 # ============================================================================
-# Step 3: Start new containers (green environment)
+# Step 2: Start new containers (green environment)
 # ============================================================================
 echo ""
-echo "🟢 Step 3/8: Starting GREEN environment..."
+echo "🟢 Step 2/7: Starting GREEN environment..."
 
 # Scale up new containers (they will run alongside old ones temporarily)
 docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale backend=2 backend
@@ -65,10 +58,10 @@ docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale bac
 echo "✅ GREEN environment started"
 
 # ============================================================================
-# Step 4: Wait for new containers to be healthy
+# Step 3: Wait for new containers to be healthy
 # ============================================================================
 echo ""
-echo "⏳ Step 4/8: Waiting for GREEN environment to be healthy..."
+echo "⏳ Step 3/7: Waiting for GREEN environment to be healthy..."
 
 MAX_WAIT=120
 WAIT_COUNT=0
@@ -93,10 +86,10 @@ if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
 fi
 
 # ============================================================================
-# Step 5: Run health checks on GREEN
+# Step 4: Run health checks on GREEN
 # ============================================================================
 echo ""
-echo "🏥 Step 5/8: Running health checks on GREEN environment..."
+echo "🏥 Step 4/7: Running health checks on GREEN environment..."
 
 # Test critical endpoints
 HEALTH_RESPONSE=$(curl -s http://localhost:8000/api/v1/health/ready)
@@ -108,10 +101,10 @@ else
 fi
 
 # ============================================================================
-# Step 6: Switch traffic to GREEN (update nginx)
+# Step 5: Switch traffic to GREEN (update nginx)
 # ============================================================================
 echo ""
-echo "🔄 Step 6/8: Switching traffic to GREEN environment..."
+echo "🔄 Step 5/7: Switching traffic to GREEN environment..."
 
 # Recreate nginx to pick up new backend containers
 docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --force-recreate nginx
@@ -120,10 +113,10 @@ sleep 5
 echo "✅ Traffic switched to GREEN"
 
 # ============================================================================
-# Step 7: Stop old BLUE containers
+# Step 6: Stop old BLUE containers
 # ============================================================================
 echo ""
-echo "🔵 Step 7/8: Stopping BLUE environment..."
+echo "🔵 Step 6/7: Stopping BLUE environment..."
 
 # Scale down to single backend instance (removes old containers)
 docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --scale backend=1 backend
@@ -131,10 +124,10 @@ docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --scale backend=1 bac
 echo "✅ BLUE environment stopped"
 
 # ============================================================================
-# Step 8: Cleanup old images
+# Step 7: Cleanup old images
 # ============================================================================
 echo ""
-echo "🧹 Step 8/8: Cleaning up old images..."
+echo "🧹 Step 7/7: Cleaning up old images..."
 
 # Keep only last 3 versions of each image
 docker images financial-agent-backend --format "{{.ID}} {{.CreatedAt}}" | \
