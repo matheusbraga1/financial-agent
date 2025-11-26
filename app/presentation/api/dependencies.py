@@ -261,11 +261,13 @@ def get_document_retriever(
     vector_store: QdrantAdapter = Depends(get_vector_store_adapter),
     reranker: Optional[CrossEncoderReranker] = Depends(get_cross_encoder_reranker),
 ) -> DocumentRetriever:
+    settings = get_settings()
     logger.debug("Criando DocumentRetriever")
     return DocumentRetriever(
         embeddings_port=embeddings,
         vector_store_port=vector_store,
         reranker=reranker,
+        max_docs_for_reranking=settings.max_docs_for_reranking,
     )
 
 def get_memory_manager(

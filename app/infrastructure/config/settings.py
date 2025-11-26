@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranking_original_weight: float = 0.3
     reranking_cross_encoder_weight: float = 0.7
+    max_docs_for_reranking: int = 20
 
     mmr_lambda: float = 0.7
 

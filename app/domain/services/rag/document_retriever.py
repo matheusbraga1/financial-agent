@@ -14,14 +14,17 @@ class DocumentRetriever:
         embeddings_port,
         vector_store_port,
         reranker=None,
+        max_docs_for_reranking: int = 20,
     ):
         self.embeddings = embeddings_port
         self.vector_store = vector_store_port
         self.reranker = reranker
-        
+        self.max_docs_for_reranking = max_docs_for_reranking
+
         logger.info(
             f"DocumentRetriever inicializado "
-            f"(reranker: {'enabled' if reranker else 'disabled'})"
+            f"(reranker: {'enabled' if reranker else 'disabled'}, "
+            f"max_docs_for_reranking: {max_docs_for_reranking})"
         )
     
     def retrieve(
@@ -68,10 +71,12 @@ class DocumentRetriever:
                 logger.info(f"Após MMR: {len(documents)} documentos")
             
             if self.reranker and len(documents) > 1:
-                logger.debug("Aplicando CrossEncoder reranking...")
+                # Limitar documentos antes do reranking para melhorar performance
+                docs_to_rerank = documents[:self.max_docs_for_reranking]
+                logger.debug(f"Aplicando CrossEncoder reranking em {len(docs_to_rerank)} documentos...")
                 documents = self.reranker.rerank(
                     query=query,
-                    documents=documents,
+                    documents=docs_to_rerank,
                     top_k=top_k,
                     original_weight=0.3,
                     rerank_weight=0.7,
