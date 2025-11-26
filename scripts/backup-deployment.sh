@@ -6,6 +6,14 @@
 
 set -e
 
+# When running in CI, use production directory for backup sources
+# When running manually, use current directory
+if [ -z "$CI" ]; then
+    PROD_DIR="."
+else
+    PROD_DIR="/opt/financial-agent/financial-agent"
+fi
+
 BACKUP_DIR="$HOME/backups"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_PATH="${BACKUP_DIR}/deployment-${TIMESTAMP}"
@@ -20,14 +28,14 @@ mkdir -p "$BACKUP_PATH"
 echo "📦 Creating backup at: $BACKUP_PATH"
 
 # Backup docker-compose configuration
-if [ -f "docker-compose.prod.yml" ]; then
-    cp docker-compose.prod.yml "${BACKUP_PATH}/"
+if [ -f "${PROD_DIR}/docker-compose.prod.yml" ]; then
+    cp "${PROD_DIR}/docker-compose.prod.yml" "${BACKUP_PATH}/"
     echo "✅ Backed up docker-compose.prod.yml"
 fi
 
 # Backup environment file
-if [ -f ".env.production" ]; then
-    cp .env.production "${BACKUP_PATH}/"
+if [ -f "${PROD_DIR}/.env.production" ]; then
+    cp "${PROD_DIR}/.env.production" "${BACKUP_PATH}/"
     echo "✅ Backed up .env.production"
 fi
 

@@ -11,10 +11,13 @@ set -e
 if [ -z "$CI" ]; then
     PROJECT_DIR="/opt/financial-agent/financial-agent"
     cd "$PROJECT_DIR"
+    ENV_FILE=".env.production"
+else
+    # In CI, use absolute path to production .env file
+    ENV_FILE="/opt/financial-agent/financial-agent/.env.production"
 fi
 
 COMPOSE_FILE="docker-compose.prod.yml"
-ENV_FILE=".env.production"
 
 # Colors for output
 RED='\033[0;31m'

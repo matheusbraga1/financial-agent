@@ -148,6 +148,7 @@ jobs:
         env:
           GIT_SHA: ${{ github.sha }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          CI: true
         run: |
           echo "📦 Creating backup of current deployment..."
           bash scripts/backup-deployment.sh
