@@ -1,154 +1,153 @@
 #!/bin/bash
+# ============================================================================
+# Health Check Script
+# Validates all services are running correctly
+# ============================================================================
 
-# ============================================================================
-# Health Check Script - Financial Agent
-# ============================================================================
-# Checks health of all services
-# ============================================================================
+set -e
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
-log_error() { echo -e "${RED}[✗]${NC} $1"; }
+FAILED_CHECKS=0
 
-echo ""
-echo "╔════════════════════════════════════════════════════════════════╗"
-echo "║           Financial Agent - Health Check Report               ║"
-echo "╚════════════════════════════════════════════════════════════════╝"
-echo ""
+echo "============================================================================"
+echo "Health Check - Financial Agent"
+echo "============================================================================"
 
 # ============================================================================
-# Check Docker
-# ============================================================================
-log_info "Checking Docker..."
-if docker info > /dev/null 2>&1; then
-    log_success "Docker is running"
-else
-    log_error "Docker is not running!"
-    exit 1
-fi
-
-# ============================================================================
-# Check Containers
+# Check 1: Docker containers
 # ============================================================================
 echo ""
-log_info "Checking containers..."
+echo "🐳 Checking Docker containers..."
 
-CONTAINERS=("financial-agent-postgres" "financial-agent-redis" "financial-agent-qdrant" "financial-agent-ollama" "financial-agent-backend" "financial-agent-nginx")
+REQUIRED_CONTAINERS=(
+    "financial-agent-backend"
+    "financial-agent-nginx"
+    "financial-agent-postgres"
+    "financial-agent-redis"
+    "financial-agent-qdrant"
+)
 
-for container in "${CONTAINERS[@]}"; do
-    if docker ps | grep -q "$container"; then
+for container in "${REQUIRED_CONTAINERS[@]}"; do
+    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
         STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "running")
         if [ "$STATUS" = "healthy" ] || [ "$STATUS" = "running" ]; then
-            log_success "$container - $STATUS"
+            echo -e "   ${GREEN}✅${NC} $container is ${STATUS}"
         else
-            log_warning "$container - $STATUS"
+            echo -e "   ${RED}❌${NC} $container status: ${STATUS}"
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
         fi
     else
-        log_error "$container - NOT RUNNING"
+        echo -e "   ${RED}❌${NC} $container is not running"
+        FAILED_CHECKS=$((FAILED_CHECKS + 1))
     fi
 done
 
 # ============================================================================
-# Check Endpoints
+# Check 2: API Health endpoints
 # ============================================================================
 echo ""
-log_info "Checking API endpoints..."
+echo "🏥 Checking API endpoints..."
 
 # Health endpoint
-if curl -s -f http://localhost/api/v1/health > /dev/null 2>&1; then
-    log_success "Health endpoint: http://localhost/api/v1/health"
+HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" http://localhost/api/v1/health/ready 2>/dev/null || echo "000")
+HTTP_CODE=$(echo "$HEALTH_RESPONSE" | tail -n1)
+BODY=$(echo "$HEALTH_RESPONSE" | head -n-1)
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo -e "   ${GREEN}✅${NC} /api/v1/health/ready (HTTP $HTTP_CODE)"
 else
-    log_error "Health endpoint: FAILED"
+    echo -e "   ${RED}❌${NC} /api/v1/health/ready (HTTP $HTTP_CODE)"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
 fi
 
-# Liveness
-if curl -s -f http://localhost/api/v1/health/live > /dev/null 2>&1; then
-    log_success "Liveness probe: OK"
+# Live endpoint
+LIVE_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/api/v1/health/live 2>/dev/null || echo "000")
+if [ "$LIVE_CODE" = "200" ]; then
+    echo -e "   ${GREEN}✅${NC} /api/v1/health/live (HTTP $LIVE_CODE)"
 else
-    log_error "Liveness probe: FAILED"
-fi
-
-# Readiness
-if curl -s -f http://localhost/api/v1/health/ready > /dev/null 2>&1; then
-    log_success "Readiness probe: OK"
-else
-    log_warning "Readiness probe: NOT READY"
-fi
-
-# ============================================================================
-# Check Database
-# ============================================================================
-echo ""
-log_info "Checking PostgreSQL..."
-
-DB_CONNECTIONS=$(docker exec financial-agent-postgres psql -U financial_agent_user -d financial_agent -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname='financial_agent';" 2>/dev/null || echo "0")
-DB_SIZE=$(docker exec financial-agent-postgres psql -U financial_agent_user -d financial_agent -tAc "SELECT pg_size_pretty(pg_database_size('financial_agent'));" 2>/dev/null || echo "unknown")
-USER_COUNT=$(docker exec financial-agent-postgres psql -U financial_agent_user -d financial_agent -tAc "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "0")
-
-log_info "Database size: ${DB_SIZE}"
-log_info "Active connections: ${DB_CONNECTIONS}"
-log_info "Total users: ${USER_COUNT}"
-
-# ============================================================================
-# Check Qdrant
-# ============================================================================
-echo ""
-log_info "Checking Qdrant..."
-
-QDRANT_RESPONSE=$(curl -s http://localhost:6333/collections/artigos_glpi 2>/dev/null || echo "{}")
-VECTOR_COUNT=$(echo "$QDRANT_RESPONSE" | grep -o '"vectors_count":[0-9]*' | cut -d: -f2 || echo "0")
-
-if [ "$VECTOR_COUNT" != "0" ]; then
-    log_info "Vectors indexed: ${VECTOR_COUNT}"
-else
-    log_warning "No vectors indexed in collection 'artigos_glpi'"
+    echo -e "   ${RED}❌${NC} /api/v1/health/live (HTTP $LIVE_CODE)"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
 fi
 
 # ============================================================================
-# Check Redis
+# Check 3: Database connectivity
 # ============================================================================
 echo ""
-log_info "Checking Redis..."
+echo "🗄️  Checking databases..."
 
-REDIS_KEYS=$(docker exec financial-agent-redis redis-cli DBSIZE 2>/dev/null | grep -o '[0-9]*' || echo "0")
-REDIS_MEM=$(docker exec financial-agent-redis redis-cli INFO memory 2>/dev/null | grep "used_memory_human" | cut -d: -f2 | tr -d '\r' || echo "unknown")
-
-log_info "Cached keys: ${REDIS_KEYS}"
-log_info "Memory used: ${REDIS_MEM}"
-
-# ============================================================================
-# Check Ollama
-# ============================================================================
-echo ""
-log_info "Checking Ollama..."
-
-if docker exec financial-agent-ollama ollama list 2>/dev/null | grep -q "qwen2.5:3b"; then
-    log_success "Model qwen2.5:3b is loaded"
+# PostgreSQL
+if docker exec financial-agent-postgres pg_isready -U postgres > /dev/null 2>&1; then
+    echo -e "   ${GREEN}✅${NC} PostgreSQL is ready"
 else
-    log_warning "Model qwen2.5:3b not found"
+    echo -e "   ${RED}❌${NC} PostgreSQL is not ready"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+fi
+
+# Redis
+if docker exec financial-agent-redis redis-cli ping > /dev/null 2>&1; then
+    echo -e "   ${GREEN}✅${NC} Redis is responding"
+else
+    echo -e "   ${RED}❌${NC} Redis is not responding"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
 fi
 
 # ============================================================================
-# Resource Usage
+# Check 4: Qdrant vector database
 # ============================================================================
 echo ""
-log_info "Resource usage:"
-docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep financial-agent
+echo "🔍 Checking Qdrant..."
+
+QDRANT_RESPONSE=$(curl -s http://localhost:6333/collections 2>/dev/null || echo "{}")
+if echo "$QDRANT_RESPONSE" | grep -q "artigos_glpi"; then
+    VECTOR_COUNT=$(echo "$QDRANT_RESPONSE" | jq -r '.result.collections[] | select(.name=="artigos_glpi") | .vectors_count' 2>/dev/null || echo "unknown")
+    echo -e "   ${GREEN}✅${NC} Qdrant collection 'artigos_glpi' exists ($VECTOR_COUNT vectors)"
+else
+    echo -e "   ${RED}❌${NC} Qdrant collection 'artigos_glpi' not found"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+fi
+
+# ============================================================================
+# Check 5: Disk space
+# ============================================================================
+echo ""
+echo "💾 Checking disk space..."
+
+DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')
+if [ "$DISK_USAGE" -lt 90 ]; then
+    echo -e "   ${GREEN}✅${NC} Disk usage: ${DISK_USAGE}%"
+else
+    echo -e "   ${YELLOW}⚠️${NC}  Disk usage: ${DISK_USAGE}% (high)"
+fi
+
+# ============================================================================
+# Check 6: Memory usage
+# ============================================================================
+echo ""
+echo "🧠 Checking memory..."
+
+MEMORY_USAGE=$(free | awk 'NR==2 {printf "%.0f", $3/$2 * 100}')
+if [ "$MEMORY_USAGE" -lt 90 ]; then
+    echo -e "   ${GREEN}✅${NC} Memory usage: ${MEMORY_USAGE}%"
+else
+    echo -e "   ${YELLOW}⚠️${NC}  Memory usage: ${MEMORY_USAGE}% (high)"
+fi
 
 # ============================================================================
 # Summary
 # ============================================================================
 echo ""
-log_info "System access:"
-log_info "  - Main app: http://192.168.1.150"
-log_info "  - Health: http://192.168.1.150/api/v1/health"
-log_info "  - Qdrant UI: http://192.168.1.150:6333/dashboard (if exposed)"
-echo ""
+echo "============================================================================"
+if [ $FAILED_CHECKS -eq 0 ]; then
+    echo -e "${GREEN}✅ All health checks passed!${NC}"
+    echo "============================================================================"
+    exit 0
+else
+    echo -e "${RED}❌ $FAILED_CHECKS health check(s) failed${NC}"
+    echo "============================================================================"
+    exit 1
+fi

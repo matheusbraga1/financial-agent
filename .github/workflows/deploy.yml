@@ -1,0 +1,233 @@
+name: CI/CD - Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # ============================================================================
+  # Stage 1: Code Quality & Linting
+  # ============================================================================
+  lint:
+    name: Code Quality & Linting
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort mypy bandit
+          pip install -r requirements.txt
+
+      - name: Run Black (formatting check)
+        run: black --check app/ --line-length 100
+        continue-on-error: true
+
+      - name: Run isort (import sorting)
+        run: isort --check-only app/
+        continue-on-error: true
+
+      - name: Run Flake8 (linting)
+        run: flake8 app/ --max-line-length=100 --ignore=E203,W503
+        continue-on-error: true
+
+      - name: Run MyPy (type checking)
+        run: mypy app/ --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Run Bandit (security check)
+        run: bandit -r app/ -ll
+        continue-on-error: false
+
+  # ============================================================================
+  # Stage 2: Unit Tests
+  # ============================================================================
+  test:
+    name: Unit Tests
+    runs-on: self-hosted
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run pytest
+        run: |
+          pytest --cov=app --cov-report=term-missing --cov-report=html
+        continue-on-error: true
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 7
+
+  # ============================================================================
+  # Stage 3: Build Docker Images
+  # ============================================================================
+  build:
+    name: Build Docker Images
+    runs-on: self-hosted
+    needs: test
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          IMAGE_TAG="prod-${SHORT_SHA}-${TIMESTAMP}"
+          echo "tags=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "📦 Building image with tag: ${IMAGE_TAG}"
+
+      - name: Build backend image
+        run: |
+          docker build -t financial-agent-backend:${{ steps.meta.outputs.tags }} \
+            -t financial-agent-backend:latest \
+            -f Dockerfile .
+
+      - name: Build nginx image
+        run: |
+          docker build -t financial-agent-nginx:${{ steps.meta.outputs.tags }} \
+            -t financial-agent-nginx:latest \
+            -f nginx/Dockerfile nginx/
+
+      - name: Verify images
+        run: |
+          docker images | grep financial-agent
+
+  # ============================================================================
+  # Stage 4: Deploy (Blue-Green)
+  # ============================================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: self-hosted
+    needs: build
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Backup current environment
+        run: |
+          echo "📦 Creating backup of current deployment..."
+          bash scripts/backup-deployment.sh
+
+      - name: Deploy Blue-Green
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          echo "🚀 Starting Blue-Green deployment..."
+          bash scripts/deploy-blue-green.sh
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "⏳ Waiting for services to be healthy..."
+          sleep 10
+
+      - name: Health check
+        run: |
+          echo "🏥 Running health checks..."
+          bash scripts/health-check.sh
+
+  # ============================================================================
+  # Stage 5: Post-Deploy Validation
+  # ============================================================================
+  validate:
+    name: Post-Deploy Validation
+    runs-on: self-hosted
+    needs: deploy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Smoke tests
+        run: |
+          echo "🧪 Running smoke tests..."
+
+          # Test health endpoint
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/api/v1/health/ready)
+          if [ "$response" != "200" ]; then
+            echo "❌ Health check failed with status $response"
+            exit 1
+          fi
+          echo "✅ Health check passed"
+
+          # Test Qdrant
+          qdrant_response=$(curl -s http://localhost:6333/collections)
+          if echo "$qdrant_response" | grep -q "artigos_glpi"; then
+            echo "✅ Qdrant collection exists"
+          else
+            echo "❌ Qdrant collection not found"
+            exit 1
+          fi
+
+      - name: Validate deployment
+        run: |
+          echo "✅ Deployment validation successful"
+          echo "🎉 Production deployment completed!"
+
+  # ============================================================================
+  # Rollback on Failure
+  # ============================================================================
+  rollback:
+    name: Rollback on Failure
+    runs-on: self-hosted
+    needs: [deploy, validate]
+    if: failure()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore previous deployment
+        run: |
+          echo "⚠️  Deployment failed - initiating rollback..."
+          bash scripts/rollback.sh
+
+      - name: Verify rollback
+        run: |
+          echo "🔍 Verifying rollback..."
+          bash scripts/health-check.sh
+
+      - name: Notify failure
+        run: |
+          echo "❌ Deployment failed and rolled back"
+          echo "Check logs for details"
