@@ -167,6 +167,9 @@ echo "✅ Cleanup completed"
 echo ""
 echo "🔍 Final verification..."
 
+# Wait for service to stabilize after scale down
+sleep 10
+
 FINAL_CHECK=$(curl -s http://localhost/api/v1/health/ready)
 if echo "$FINAL_CHECK" | grep -q '"status":"ready"'; then
     echo -e "${GREEN}✅ Deployment successful!${NC}"
