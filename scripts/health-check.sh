@@ -33,8 +33,11 @@ REQUIRED_CONTAINERS=(
 )
 
 for container in "${REQUIRED_CONTAINERS[@]}"; do
-    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
-        STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "running")
+    # Find container by pattern (handles dynamic names like backend-1, backend-2, etc.)
+    ACTUAL_CONTAINER=$(docker ps --format '{{.Names}}' | grep "^${container}" | head -n 1)
+
+    if [ -n "$ACTUAL_CONTAINER" ]; then
+        STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$ACTUAL_CONTAINER" 2>/dev/null || echo "running")
         if [ "$STATUS" = "healthy" ] || [ "$STATUS" = "running" ]; then
             echo -e "   ${GREEN}✅${NC} $container is ${STATUS}"
         else
@@ -81,7 +84,8 @@ echo ""
 echo "🗄️  Checking databases..."
 
 # PostgreSQL
-if docker exec financial-agent-postgres pg_isready -U postgres > /dev/null 2>&1; then
+POSTGRES_CONTAINER=$(docker ps --format '{{.Names}}' | grep "^financial-agent-postgres" | head -n 1)
+if [ -n "$POSTGRES_CONTAINER" ] && docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres > /dev/null 2>&1; then
     echo -e "   ${GREEN}✅${NC} PostgreSQL is ready"
 else
     echo -e "   ${RED}❌${NC} PostgreSQL is not ready"
@@ -89,7 +93,8 @@ else
 fi
 
 # Redis
-if docker exec financial-agent-redis redis-cli ping > /dev/null 2>&1; then
+REDIS_CONTAINER=$(docker ps --format '{{.Names}}' | grep "^financial-agent-redis" | head -n 1)
+if [ -n "$REDIS_CONTAINER" ] && docker exec "$REDIS_CONTAINER" redis-cli ping > /dev/null 2>&1; then
     echo -e "   ${GREEN}✅${NC} Redis is responding"
 else
     echo -e "   ${RED}❌${NC} Redis is not responding"
