@@ -6,7 +6,7 @@
 
 set -e
 
-BACKUP_DIR="/opt/financial-agent/backups"
+BACKUP_DIR="$HOME/backups"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_PATH="${BACKUP_DIR}/deployment-${TIMESTAMP}"
 

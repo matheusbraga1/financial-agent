@@ -6,7 +6,7 @@
 
 set -e
 
-BACKUP_DIR="/opt/financial-agent/backups"
+BACKUP_DIR="$HOME/backups"
 PROJECT_DIR="/opt/financial-agent/financial-agent"
 
 # Colors
