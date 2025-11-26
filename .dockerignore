@@ -76,10 +76,6 @@ logs/
 cache/
 volumes/
 
-# Scripts
-scripts/
-backup/
-
 # Misc
 *.log
 *.pid
