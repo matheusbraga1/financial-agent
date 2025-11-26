@@ -48,7 +48,7 @@ docker build -t financial-agent-backend:${NEW_TAG} \
 # Build nginx
 docker build -t financial-agent-nginx:${NEW_TAG} \
              -t financial-agent-nginx:latest \
-             -f nginx/Dockerfile nginx/
+             -f nginx/Dockerfile.nginx nginx/
 
 echo "✅ Images built successfully"
 
