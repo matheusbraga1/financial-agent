@@ -212,7 +212,6 @@ services:
       dockerfile: Dockerfile
 
     image: financial-agent-backend:latest
-    container_name: financial-agent-backend
     restart: unless-stopped
 
     env_file:
@@ -270,7 +269,6 @@ services:
       dockerfile: Dockerfile.nginx
 
     image: financial-agent-nginx:latest
-    container_name: financial-agent-nginx
     restart: unless-stopped
 
     ports:

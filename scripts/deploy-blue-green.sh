@@ -53,29 +53,29 @@ docker build -t financial-agent-nginx:${NEW_TAG} \
 echo "✅ Images built successfully"
 
 # ============================================================================
-# Step 2: Start new containers (green environment)
+# Step 2: Start GREEN environment (scale backend to 2)
 # ============================================================================
 echo ""
-echo "🟢 Step 2/7: Starting GREEN environment..."
+echo "🚀 Step 2/7: Starting GREEN environment..."
 
-# Scale up new containers (they will run alongside old ones temporarily)
+# Scale backend to 2 instances (BLUE + GREEN running simultaneously)
 docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale backend=2 backend
 
-echo "✅ GREEN environment started"
+echo "✅ GREEN environment started (2 backends running)"
 
 # ============================================================================
-# Step 3: Wait for new containers to be healthy
+# Step 3: Wait for services to be healthy
 # ============================================================================
 echo ""
-echo "⏳ Step 3/7: Waiting for GREEN environment to be healthy..."
+echo "⏳ Step 3/7: Waiting for services to be healthy..."
 
 MAX_WAIT=120
 WAIT_COUNT=0
 
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    # Check if new backend is responding
-    if curl -sf http://localhost:8000/api/v1/health/ready > /dev/null 2>&1; then
-        echo "✅ GREEN environment is healthy"
+    # Check if backend is responding
+    if curl -sf http://localhost/api/v1/health/ready > /dev/null 2>&1; then
+        echo "✅ Services are healthy"
         break
     fi
 
@@ -85,20 +85,18 @@ while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
 done
 
 if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-    echo -e "${RED}❌ GREEN environment failed to become healthy${NC}"
-    echo "   Rolling back..."
-    docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --scale backend=1 backend
+    echo -e "${RED}❌ Services failed to become healthy${NC}"
     exit 1
 fi
 
 # ============================================================================
-# Step 4: Run health checks on GREEN
+# Step 4: Run health checks
 # ============================================================================
 echo ""
-echo "🏥 Step 4/7: Running health checks on GREEN environment..."
+echo "🏥 Step 4/7: Running health checks..."
 
 # Test critical endpoints
-HEALTH_RESPONSE=$(curl -s http://localhost:8000/api/v1/health/ready)
+HEALTH_RESPONSE=$(curl -s http://localhost/api/v1/health/ready)
 if echo "$HEALTH_RESPONSE" | grep -q '"status":"ready"'; then
     echo "✅ Health check passed"
 else
@@ -107,27 +105,28 @@ else
 fi
 
 # ============================================================================
-# Step 5: Switch traffic to GREEN (update nginx)
+# Step 5: Switch traffic to GREEN (recreate nginx)
 # ============================================================================
 echo ""
 echo "🔄 Step 5/7: Switching traffic to GREEN environment..."
 
-# Recreate nginx to pick up new backend containers
+# Recreate nginx to load balance across both backends
 docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --force-recreate nginx
 
-sleep 5
 echo "✅ Traffic switched to GREEN"
 
 # ============================================================================
-# Step 6: Stop old BLUE containers
+# Step 6: Scale down to 1 backend (remove BLUE)
 # ============================================================================
 echo ""
-echo "🔵 Step 6/7: Stopping BLUE environment..."
+echo "🔽 Step 6/7: Scaling down to 1 backend..."
 
-# Scale down to single backend instance (removes old containers)
-docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --scale backend=1 backend
+sleep 5  # Brief pause to ensure traffic has switched
 
-echo "✅ BLUE environment stopped"
+# Scale backend down to 1 (only GREEN remains)
+docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d --no-deps --scale backend=1 backend
+
+echo "✅ BLUE environment removed (1 backend running)"
 
 # ============================================================================
 # Step 7: Cleanup old images
