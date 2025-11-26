@@ -34,9 +34,9 @@ if [ -f "${PROD_DIR}/docker-compose.prod.yml" ]; then
 fi
 
 # Backup environment file
-if [ -f "${PROD_DIR}/.env.production" ]; then
-    cp "${PROD_DIR}/.env.production" "${BACKUP_PATH}/"
-    echo "✅ Backed up .env.production"
+if [ -f "${PROD_DIR}/.env" ]; then
+    cp "${PROD_DIR}/.env" "${BACKUP_PATH}/"
+    echo "✅ Backed up .env"
 fi
 
 # Save current container states

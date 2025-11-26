@@ -13,12 +13,13 @@ if [ -z "$CI" ]; then
     cd "$PROJECT_DIR"
 else
     # In CI, create symlink to production .env file
-    PROD_ENV="/opt/financial-agent/financial-agent/.env.production"
+    PROD_ENV="/opt/financial-agent/financial-agent/.env"
     if [ -f "$PROD_ENV" ]; then
-        ln -sf "$PROD_ENV" .env.production
-        echo "✅ Linked .env.production from production directory"
+        # Docker Compose looks for .env for variable substitution in YAML
+        ln -sf "$PROD_ENV" .env
+        echo "✅ Linked .env from production directory"
     else
-        echo "❌ Production .env.production not found at $PROD_ENV"
+        echo "❌ Production .env not found at $PROD_ENV"
         exit 1
     fi
 fi

@@ -83,9 +83,9 @@ if [ -f "${BACKUP_PATH}/docker-compose.prod.yml" ]; then
 fi
 
 # Restore environment
-if [ -f "${BACKUP_PATH}/.env.production" ]; then
-    cp "${BACKUP_PATH}/.env.production" "$PROJECT_DIR/"
-    echo "✅ Restored .env.production"
+if [ -f "${BACKUP_PATH}/.env" ]; then
+    cp "${BACKUP_PATH}/.env" "$PROJECT_DIR/"
+    echo "✅ Restored .env"
 fi
 
 # ============================================================================
