@@ -24,43 +24,44 @@ jobs:
 
       - name: Setup Python environment
         run: |
-          if [ ! -d "/opt/financial-agent/venv" ]; then
-            python3.11 -m venv /opt/financial-agent/venv
-            source /opt/financial-agent/venv/bin/activate
+          VENV_PATH="$HOME/venv"
+          if [ ! -d "$VENV_PATH" ]; then
+            python3.11 -m venv "$VENV_PATH"
+            source "$VENV_PATH/bin/activate"
             pip install --upgrade pip
             pip install -r requirements.txt
             pip install flake8 black isort mypy bandit pytest pytest-cov pytest-asyncio
           fi
-          source /opt/financial-agent/venv/bin/activate
+          source "$VENV_PATH/bin/activate"
           pip install --upgrade --upgrade-strategy only-if-needed -r requirements.txt
 
       - name: Run Black (formatting check)
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           black --check app/ --line-length 100
         continue-on-error: true
 
       - name: Run isort (import sorting)
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           isort --check-only app/
         continue-on-error: true
 
       - name: Run Flake8 (linting)
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           flake8 app/ --max-line-length=100 --ignore=E203,W503
         continue-on-error: true
 
       - name: Run MyPy (type checking)
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           mypy app/ --ignore-missing-imports
         continue-on-error: true
 
       - name: Run Bandit (security check)
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           bandit -r app/ -ll
         continue-on-error: false
 
@@ -78,7 +79,7 @@ jobs:
 
       - name: Run pytest
         run: |
-          source /opt/financial-agent/venv/bin/activate
+          source "$HOME/venv/bin/activate"
           pytest --cov=app --cov-report=term-missing --cov-report=html
         continue-on-error: true
 

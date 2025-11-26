@@ -6,7 +6,7 @@
 
 set -e
 
-PROJECT_DIR="/opt/financial-agent/backend"
+PROJECT_DIR="/opt/financial-agent/financial-agent"
 COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env.production"
 

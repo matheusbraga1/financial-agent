@@ -7,7 +7,7 @@
 set -e
 
 BACKUP_DIR="/opt/financial-agent/backups"
-PROJECT_DIR="/opt/financial-agent/backend"
+PROJECT_DIR="/opt/financial-agent/financial-agent"
 
 # Colors
 RED='\033[0;31m'
