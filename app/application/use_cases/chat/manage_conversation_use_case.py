@@ -13,19 +13,37 @@ class ManageConversationUseCase:
     ):
         self.conversations = conversation_repository_port
         self.vector_store = vector_store_port
-    
+
+    @staticmethod
+    def _is_valid_uuid(value: str) -> bool:
+        """Validates if a string is a valid UUID format."""
+        try:
+            uuid.UUID(value)
+            return True
+        except (ValueError, AttributeError, TypeError):
+            return False
+
     def ensure_session(
-        self, 
-        session_id: Optional[str], 
+        self,
+        session_id: Optional[str],
         user_id: Optional[str]
     ) -> str:
-        sid = session_id or str(uuid.uuid4())
-        
+        # Validate session_id is a valid UUID, otherwise generate new one
+        if session_id and self._is_valid_uuid(session_id):
+            sid = session_id
+        else:
+            sid = str(uuid.uuid4())
+            if session_id:
+                logger.warning(
+                    f"Invalid session_id format received: '{session_id}'. "
+                    f"Generated new UUID: {sid}"
+                )
+
         try:
             self.conversations.create_session(sid, user_id=user_id)
         except Exception as e:
             logger.warning(f"Falha ao criar sessão {sid}: {e}")
-        
+
         return sid
     
     def get_history(
