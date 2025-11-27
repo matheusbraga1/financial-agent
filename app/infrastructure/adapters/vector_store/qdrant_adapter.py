@@ -19,6 +19,8 @@ from app.infrastructure.config.settings import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+BATCH_SIZE = 64
+
 
 class QdrantAdapter:
     def __init__(
@@ -96,10 +98,11 @@ class QdrantAdapter:
             points=[point]
         )
 
-        logger.debug(f"Point upserted: {point_id}")
+        logger.debug(f"Upserted point: {point_id}")
 
     def upsert_points(self, points: List[PointStruct]) -> None:
         if not points:
+            logger.debug("Skipping upsert - no points provided")
             return
 
         self.client.upsert(
@@ -126,7 +129,10 @@ class QdrantAdapter:
                 with_payload=True,
             )
 
-            logger.debug(f"Vector search returned {len(results)} results")
+            logger.debug(
+                f"Vector search: found {len(results)} docs "
+                f"(limit={limit}, threshold={score_threshold or 'none'})"
+            )
             return results
 
         except Exception as e:
@@ -156,7 +162,10 @@ class QdrantAdapter:
                 with_vectors=False,
             )
 
-            logger.debug(f"Text search returned {len(results)} results")
+            logger.debug(
+                f"Text search: found {len(results)} docs "
+                f"(query='{query_text[:50]}...', limit={limit})"
+            )
             return results
 
         except Exception as e:
@@ -177,37 +186,47 @@ class QdrantAdapter:
             vector_results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
-                limit=limit * 2,
+                limit=limit,
                 score_threshold=score_threshold if score_threshold else 0.0,
                 with_payload=True,
             )
 
-            documents = []
-            for result in vector_results:
-                payload = result.payload or {}
+            documents = self._parse_search_results(vector_results)
 
-                doc = {
-                    "id": str(result.id),
-                    "score": float(result.score),
-                    "title": payload.get("title", ""),
-                    "content": payload.get("content", ""),
-                    "doc_type": payload.get("doc_type", ""),
-                    "department": payload.get("department", ""),
-                    "tags": payload.get("tags", []),
-                    "created_at": payload.get("created_at", ""),
-                    "updated_at": payload.get("updated_at", ""),
-                    "usage_count": payload.get("usage_count", 0),
-                    "helpful_votes": payload.get("helpful_votes", 0),
-                }
+            logger.debug(
+                f"Hybrid search: fetched {len(documents)} docs "
+                f"(limit={limit}, threshold={score_threshold or 0.0:.2f})"
+            )
 
-                documents.append(doc)
-
-            logger.debug(f"Hybrid search returned {len(documents)} results")
-            return documents[:limit]
+            return documents
 
         except Exception as e:
             logger.warning(f"Hybrid search failed (Qdrant offline?): {e}")
             return []
+
+    def _parse_search_results(self, results: List[Any]) -> List[Dict[str, Any]]:
+        documents = []
+
+        for result in results:
+            payload = result.payload or {}
+
+            doc = {
+                "id": str(result.id),
+                "score": float(result.score),
+                "title": payload.get("title", ""),
+                "content": payload.get("content", ""),
+                "doc_type": payload.get("doc_type", ""),
+                "department": payload.get("department", ""),
+                "tags": payload.get("tags", []),
+                "created_at": payload.get("created_at", ""),
+                "updated_at": payload.get("updated_at", ""),
+                "usage_count": payload.get("usage_count", 0),
+                "helpful_votes": payload.get("helpful_votes", 0),
+            }
+
+            documents.append(doc)
+
+        return documents
 
     def retrieve_points(
         self,
@@ -252,22 +271,24 @@ class QdrantAdapter:
 
     def increment_usage(self, point_ids: List[str]) -> None:
         if not point_ids:
+            logger.debug("Skipping usage increment - no point IDs provided")
             return
 
-        unique_ids = list(dict.fromkeys(str(pid) for pid in point_ids if pid))
+        unique_ids = self._deduplicate_ids(point_ids)
         if not unique_ids:
+            logger.debug("Skipping usage increment - no valid IDs after deduplication")
             return
 
         timestamp = datetime.utcnow().isoformat()
 
         try:
-            for i in range(0, len(unique_ids), 64):
-                batch = unique_ids[i:i+64]
+            processed_count = 0
 
+            for batch in self._batch_ids(unique_ids):
                 points = self.retrieve_points(batch, with_payload=True, with_vectors=False)
 
                 for point in points:
-                    current_usage = int((point.payload or {}).get("usage_count", 0) or 0)
+                    current_usage = self._get_safe_int(point.payload, "usage_count")
                     new_usage = current_usage + 1
 
                     self.update_payload(
@@ -277,8 +298,9 @@ class QdrantAdapter:
                             "last_used_at": timestamp,
                         }
                     )
+                    processed_count += 1
 
-            logger.debug(f"Incremented usage for {len(unique_ids)} documents")
+            logger.debug(f"Incremented usage for {processed_count} documents")
 
         except Exception as e:
             logger.debug(f"Failed to increment usage: {e}")
@@ -289,30 +311,36 @@ class QdrantAdapter:
         helpful: bool,
     ) -> None:
         if not point_ids:
+            logger.debug("Skipping feedback recording - no point IDs provided")
             return
 
-        unique_ids = list(dict.fromkeys(str(pid) for pid in point_ids if pid))
+        unique_ids = self._deduplicate_ids(point_ids)
         if not unique_ids:
+            logger.debug("Skipping feedback recording - no valid IDs after deduplication")
             return
 
         field = "helpful_votes" if helpful else "complaints"
 
         try:
-            for i in range(0, len(unique_ids), 64):
-                batch = unique_ids[i:i+64]
+            processed_count = 0
 
+            for batch in self._batch_ids(unique_ids):
                 points = self.retrieve_points(batch, with_payload=True, with_vectors=False)
 
                 for point in points:
-                    current_value = int((point.payload or {}).get(field, 0) or 0)
+                    current_value = self._get_safe_int(point.payload, field)
                     new_value = current_value + 1
 
                     self.update_payload(
                         point_ids=[point.id],
                         payload={field: new_value}
                     )
+                    processed_count += 1
 
-            logger.debug(f"Recorded feedback for {len(unique_ids)} documents")
+            logger.debug(
+                f"Recorded {'helpful' if helpful else 'complaint'} feedback "
+                f"for {processed_count} documents"
+            )
 
         except Exception as e:
             logger.debug(f"Failed to record feedback: {e}")
@@ -368,3 +396,24 @@ class QdrantAdapter:
             "indexed_vectors_count": vectors_count,
             "status": "ok" if info.get("exists") else "not_found",
         }
+
+    @staticmethod
+    def _deduplicate_ids(point_ids: List[str]) -> List[str]:
+        return list(dict.fromkeys(str(pid) for pid in point_ids if pid))
+
+    @staticmethod
+    def _batch_ids(unique_ids: List[str]):
+        for i in range(0, len(unique_ids), BATCH_SIZE):
+            yield unique_ids[i:i + BATCH_SIZE]
+
+    @staticmethod
+    def _get_safe_int(payload: Optional[Dict[str, Any]], field: str) -> int:
+        if not payload:
+            return 0
+
+        value = payload.get(field, 0)
+
+        try:
+            return int(value or 0)
+        except (ValueError, TypeError):
+            return 0
