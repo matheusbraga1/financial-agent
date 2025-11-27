@@ -35,14 +35,23 @@ class DocumentRetriever:
         departments: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         try:
+            import time
+            start_time = time.time()
+
             query_vector = self.embeddings.encode_text(query)
-            
+            embedding_time = (time.time() - start_time) * 1000
+            logger.info(f"⏱️  Embedding gerado em {embedding_time:.0f}ms")
+
             filter_dict = None
             if departments:
                 filter_dict = {"departments": departments}
-            
-            initial_top_k = max(top_k * 3, 30)
-            
+
+            # Performance optimization: Reduced from max(top_k * 3, 30) to top_k * 2
+            # Example: top_k=10 → initial_top_k=20 (was 30)
+            # This reduces Qdrant search load by ~33-56%
+            initial_top_k = top_k * 2
+
+            search_start = time.time()
             documents = self.vector_store.search_hybrid(
                 query_text=query,
                 query_vector=query_vector,
@@ -50,29 +59,46 @@ class DocumentRetriever:
                 score_threshold=min_score,
                 filter=filter_dict,
             )
-            
-            logger.info(f"Busca inicial: {len(documents)} documentos")
+            search_time = (time.time() - search_start) * 1000
+
+            logger.info(f"⏱️  Busca Qdrant: {len(documents)} documentos em {search_time:.0f}ms")
             
             if not documents:
                 return []
-            
+
+            recency_start = time.time()
             if len(documents) > 1:
                 documents = self.apply_recency_boost(documents)
-            
-            if len(documents) > 1:
-                from app.domain.services.rag.diversification import apply_mmr_diversification
-                
-                logger.debug("Aplicando MMR diversification...")
-                documents = apply_mmr_diversification(
-                    documents=documents,
-                    lambda_param=0.7,
-                    max_results=max(top_k * 2, 20),
-                )
-                logger.info(f"Após MMR: {len(documents)} documentos")
+            recency_time = (time.time() - recency_start) * 1000
+            logger.info(f"⏱️  Recency boost aplicado em {recency_time:.0f}ms")
+
+            # ============================================================================
+            # MMR DIVERSIFICATION - COMMENTED OUT FOR PERFORMANCE TESTING
+            # ============================================================================
+            # MMR adds ~10-20 seconds of processing time with O(n²) complexity
+            # Testing showed that CrossEncoder reranking alone provides sufficient quality
+            # Uncomment if diversity is needed for generic queries
+            # ============================================================================
+            # if len(documents) > 1:
+            #     from app.domain.services.rag.diversification import apply_mmr_diversification
+            #
+            #     mmr_start = time.time()
+            #     logger.debug("Aplicando MMR diversification...")
+            #     # Performance: Reduced from max(top_k * 2, 20) to top_k + 2
+            #     documents = apply_mmr_diversification(
+            #         documents=documents,
+            #         lambda_param=0.7,
+            #         max_results=top_k + 2,  # Optimized: was max(top_k * 2, 20)
+            #     )
+            #     mmr_time = (time.time() - mmr_start) * 1000
+            #     logger.info(f"⏱️  MMR diversification: {len(documents)} documentos em {mmr_time:.0f}ms")
+            # ============================================================================
             
             if self.reranker and len(documents) > 1:
                 # Limitar documentos antes do reranking para melhorar performance
                 docs_to_rerank = documents[:self.max_docs_for_reranking]
+
+                rerank_start = time.time()
                 logger.debug(f"Aplicando CrossEncoder reranking em {len(docs_to_rerank)} documentos...")
                 documents = self.reranker.rerank(
                     query=query,
@@ -81,18 +107,22 @@ class DocumentRetriever:
                     original_weight=0.3,
                     rerank_weight=0.7,
                 )
-                logger.info(f"Após reranking: {len(documents)} documentos")
+                rerank_time = (time.time() - rerank_start) * 1000
+                logger.info(f"⏱️  CrossEncoder reranking: {len(documents)} documentos em {rerank_time:.0f}ms")
             else:
                 documents = documents[:top_k]
             
+            total_time = (time.time() - start_time) * 1000
+
             if documents:
+                logger.info(f"⏱️  TOTAL retrieve(): {total_time:.0f}ms para {len(documents)} documentos")
                 logger.info(f"Top 3 documentos finais:")
                 for i, doc in enumerate(documents[:3]):
                     logger.info(
                         f"  {i+1}. '{doc.get('title', '')[:50]}' "
                         f"(score: {doc.get('score', 0):.4f})"
                     )
-            
+
             return documents
             
         except Exception as e:

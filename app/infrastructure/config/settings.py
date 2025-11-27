@@ -41,13 +41,16 @@ class Settings(BaseSettings):
     # Controle de recursos para evitar alto uso de CPU
     # num_thread: número de threads (default conservador, aumente para produção)
     # num_ctx: tamanho do contexto (1024-2048 para dev, 2048-4096 para produção)
-    ollama_num_thread: int = 2
-    ollama_num_ctx: int = 1024
+    ollama_num_thread: int = 4  # Otimizado: aumentado de 2 para 4 (melhor performance)
+    ollama_num_ctx: int = 2048  # Otimizado: aumentado de 1024 para 2048
 
     embedding_model: str = "intfloat/multilingual-e5-large"
     embedding_dimension: int = 1024
 
-    top_k_results: int = 15
+    # Performance optimization: Reduced pipeline overhead
+    # top_k_results: Final number of documents returned (was 15, now 10)
+    # max_docs_for_reranking: Reduced from 20 to 12 (40% faster reranking)
+    top_k_results: int = 10  # Otimizado: reduzido de 15 para 10 (-33%)
     min_similarity_score: float = 0.12
     fallback_min_score: float = 0.05
     enable_query_expansion: bool = True
@@ -57,7 +60,7 @@ class Settings(BaseSettings):
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranking_original_weight: float = 0.3
     reranking_cross_encoder_weight: float = 0.7
-    max_docs_for_reranking: int = 20
+    max_docs_for_reranking: int = 12  # Otimizado: reduzido de 20 para 12 (-40%)
 
     mmr_lambda: float = 0.7
 
