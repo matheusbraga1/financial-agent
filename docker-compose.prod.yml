@@ -269,7 +269,7 @@ services:
     restart: unless-stopped
 
     volumes:
-      - frontend_static:/app/dist:ro
+      - frontend_static:/app/dist
 
     deploy:
       resources:
