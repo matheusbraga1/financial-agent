@@ -353,3 +353,4 @@ volumes:
     name: financial-agent-nginx-logs
   frontend_static:
     name: financial-agent-frontend-static
+    external: true

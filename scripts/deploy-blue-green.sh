@@ -68,6 +68,21 @@ docker build -t financial-agent-nginx:${NEW_TAG} \
 echo "✅ Images built successfully"
 
 # ============================================================================
+# Step 1.5: Cleanup old frontend container (if exists)
+# ============================================================================
+echo ""
+echo "🧹 Step 1.5/7: Cleaning up old containers..."
+
+# Remove old standalone frontend container if it exists
+if docker ps -a --format '{{.Names}}' | grep -q '^financial-agent-frontend$'; then
+    echo "   Removing old frontend container..."
+    docker rm -f financial-agent-frontend || true
+    echo "✅ Old frontend container removed"
+else
+    echo "✅ No old containers to clean up"
+fi
+
+# ============================================================================
 # Step 2: Start GREEN environment (scale backend to 2)
 # ============================================================================
 echo ""
