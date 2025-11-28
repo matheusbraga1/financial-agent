@@ -263,6 +263,32 @@ services:
     networks:
       - financial-agent-network
 
+  frontend:
+    image: financial-agent-frontend:latest
+    container_name: financial-agent-frontend
+    restart: unless-stopped
+
+    volumes:
+      - frontend_static:/app/dist:ro
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          memory: 128M
+
+    healthcheck:
+      test: ["CMD", "/app/health.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - financial-agent-network
+
   nginx:
     build:
       context: ./nginx
@@ -278,6 +304,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - nginx_logs:/var/log/nginx
+      - frontend_static:/usr/share/nginx/html:ro
 
     deploy:
       resources:
@@ -295,6 +322,8 @@ services:
 
     depends_on:
       backend:
+        condition: service_healthy
+      frontend:
         condition: service_healthy
 
     networks:
@@ -322,3 +351,5 @@ volumes:
     name: financial-agent-backend-cache
   nginx_logs:
     name: financial-agent-nginx-logs
+  frontend_static:
+    name: financial-agent-frontend-static

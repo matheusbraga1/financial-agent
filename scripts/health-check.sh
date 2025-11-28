@@ -26,6 +26,7 @@ echo "🐳 Checking Docker containers..."
 
 REQUIRED_CONTAINERS=(
     "financial-agent-backend"
+    "financial-agent-frontend"
     "financial-agent-nginx"
     "financial-agent-postgres"
     "financial-agent-redis"
@@ -74,6 +75,24 @@ if [ "$LIVE_CODE" = "200" ]; then
     echo -e "   ${GREEN}✅${NC} /api/v1/health/live (HTTP $LIVE_CODE)"
 else
     echo -e "   ${RED}❌${NC} /api/v1/health/live (HTTP $LIVE_CODE)"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+fi
+
+# Frontend via Nginx
+FRONTEND_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/ 2>/dev/null || echo "000")
+if [ "$FRONTEND_CODE" = "200" ]; then
+    echo -e "   ${GREEN}✅${NC} Frontend via Nginx (HTTP $FRONTEND_CODE)"
+else
+    echo -e "   ${RED}❌${NC} Frontend via Nginx (HTTP $FRONTEND_CODE)"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+fi
+
+# Nginx health endpoint
+NGINX_HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health 2>/dev/null || echo "000")
+if [ "$NGINX_HEALTH_CODE" = "200" ]; then
+    echo -e "   ${GREEN}✅${NC} Nginx /health (HTTP $NGINX_HEALTH_CODE)"
+else
+    echo -e "   ${RED}❌${NC} Nginx /health (HTTP $NGINX_HEALTH_CODE)"
     FAILED_CHECKS=$((FAILED_CHECKS + 1))
 fi
 
